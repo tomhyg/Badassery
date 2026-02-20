@@ -1,0 +1,165 @@
+================================================================================
+  QUICK START - PARALLEL SCORING V2.0
+================================================================================
+
+🎯 OBJECTIF: Traiter 120K podcasts en 10-20 heures (vs 11 jours)
+
+================================================================================
+  OPTION 1: LANCER AVEC LE BATCH FILE (RECOMMANDÉ)
+================================================================================
+
+1. Double-cliquer sur: LANCER_PARALLEL.bat
+
+2. Choisir dans le menu:
+   - Option 1: TEST avec 1000 podcasts (COMMENCER ICI)
+   - Option 2: DRY-RUN complet (pour estimer le temps)
+   - Options 3-6: Waves de 30K (production)
+
+================================================================================
+  OPTION 2: COMMANDES DIRECTES
+================================================================================
+
+# TEST INITIAL (TOUJOURS COMMENCER PAR ÇA)
+node scripts/parallel_scoring_v2.js --limit=1000
+
+# DRY-RUN COMPLET (pas d'écriture Firestore)
+node scripts/parallel_scoring_v2.js --dry-run
+
+# WAVE 1: Premiers 30K podcasts
+node scripts/parallel_scoring_v2.js --offset=0 --limit=30000
+
+# WAVE 2: Podcasts 30K-60K
+node scripts/parallel_scoring_v2.js --offset=30000 --limit=30000
+
+# WAVE 3: Podcasts 60K-90K
+node scripts/parallel_scoring_v2.js --offset=60000 --limit=30000
+
+# WAVE 4: Podcasts 90K-120K
+node scripts/parallel_scoring_v2.js --offset=90000 --limit=30000
+
+================================================================================
+  CONFIGURATIONS DISPONIBLES
+================================================================================
+
+--config=conservative   10 parallel (free tier, test)
+--config=safe          20 parallel (RECOMMANDÉ pour débuter)
+--config=aggressive    50 parallel (après validation)
+
+Exemple:
+node scripts/parallel_scoring_v2.js --config=aggressive --limit=1000
+
+================================================================================
+  FONCTIONNALITÉS CLÉS
+================================================================================
+
+✅ CHECKPOINTING AUTOMATIQUE
+   - Sauvegarde tous les 1000 podcasts
+   - Reprend automatiquement en cas de crash
+   - Fichier: .checkpoint.json
+
+✅ CIRCUIT BREAKER
+   - Arrêt automatique après 10 erreurs consécutives
+   - Évite de gaspiller de l'argent en cas de problème
+
+✅ PROGRESS BAR + ETA
+   - Affichage en temps réel:
+     [████████████░░░░] 72% | 21600/30000 | ETA: 1h 23m | Rate: 5.3/s
+
+✅ MEMORY MONITORING
+   - Warning si mémoire > 1.5GB
+   - Affichage final de l'utilisation mémoire
+
+================================================================================
+  PLAN RECOMMANDÉ (SÉCURISÉ)
+================================================================================
+
+JOUR 1 - VALIDATION:
+  1. Test 1000 podcasts (5-10 min)
+     node scripts/parallel_scoring_v2.js --limit=1000
+     → Vérifier que tout fonctionne
+
+  2. Dry-run complet (10-12h)
+     node scripts/parallel_scoring_v2.js --dry-run
+     → Estimer le temps réel, SANS écriture Firestore
+
+JOUR 2 - PRODUCTION:
+  3. Wave 1: 30K podcasts (3-5h)
+     node scripts/parallel_scoring_v2.js --offset=0 --limit=30000
+     → Vérifier résultats dans Firestore
+
+  4. Wave 2: 30K podcasts (3-5h)
+     node scripts/parallel_scoring_v2.js --offset=30000 --limit=30000
+
+JOUR 3 - FINALISATION:
+  5. Wave 3: 30K podcasts (3-5h)
+     node scripts/parallel_scoring_v2.js --offset=60000 --limit=30000
+
+  6. Wave 4: 30K podcasts (3-5h)
+     node scripts/parallel_scoring_v2.js --offset=90000 --limit=30000
+
+================================================================================
+  COÛTS ESTIMÉS
+================================================================================
+
+Gemini API (Paid Tier):
+  120K podcasts × $0.075 / 1M tokens = ~$4.50
+
+Firestore:
+  120K writes × $0.18 / 100K = ~$0.22
+
+TOTAL: ~$4.72 pour 120K podcasts
+
+================================================================================
+  TROUBLESHOOTING RAPIDE
+================================================================================
+
+❌ "Too many consecutive errors"
+   → Attendre 1-2 min, relancer (reprendra au checkpoint)
+
+❌ "JavaScript heap out of memory"
+   → Augmenter: node --max-old-space-size=4096 scripts/...
+
+❌ Script trop lent
+   → Passer en --config=aggressive (après validation)
+
+❌ Checkpoint bloqué
+   → Supprimer: rm .checkpoint.json
+
+================================================================================
+  VÉRIFICATIONS APRÈS TRAITEMENT
+================================================================================
+
+1. Compter les podcasts complétés:
+   - Firestore console → podcasts collection
+   - Filtre: aiCategorizationStatus == 'completed'
+   - Attendu: ~120,000
+
+2. Vérifier Top 10:
+   - Filtre: ai_badassery_score >= 80
+   - Tri: ai_badassery_score DESC
+
+3. Clear checkpoint:
+   - Supprimer .checkpoint.json une fois terminé
+
+================================================================================
+  FICHIERS DISPONIBLES
+================================================================================
+
+📄 scripts/parallel_scoring_v2.js  - Script principal
+📄 LANCER_PARALLEL.bat             - Launcher Windows
+📄 PARALLEL_SCORING_GUIDE.md       - Documentation complète
+📄 QUICK_START_PARALLEL.txt        - Ce fichier
+
+================================================================================
+  PRÊT À LANCER?
+================================================================================
+
+Double-cliquez sur: LANCER_PARALLEL.bat
+
+OU
+
+Tapez: node scripts/parallel_scoring_v2.js --limit=1000
+
+🚀 LET'S GO!
+
+================================================================================

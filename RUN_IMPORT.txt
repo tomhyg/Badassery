@@ -1,0 +1,123 @@
+═══════════════════════════════════════════════════════════════════════════════
+  🚀 IMPORT ENRICHED DATA TO FIRESTORE - QUICK START GUIDE
+═══════════════════════════════════════════════════════════════════════════════
+
+📦 WHAT WILL BE IMPORTED:
+  ✅ 42 files total (enriched_vm1-20, checkpoint_vm9/18, remaining_split)
+  ✅ 137 enriched fields per podcast (emails, ratings, YouTube, episodes, etc.)
+  ✅ ALL available data - "LA TOTALE!"
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🏃 HOW TO RUN:
+
+1. Open PowerShell or CMD
+
+2. Navigate to the folder:
+   cd "C:\Users\admin\OneDrive\Bureau\Dossier danielle"
+
+3. Run the import:
+   node scripts/import_enriched_data.js
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⏱️ EXPECTED DURATION:
+  - Processing speed: ~50-100 podcasts per minute
+  - Total time: 30-60 minutes (depends on matches found)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 WHAT YOU'LL SEE:
+
+  📂 Loading enriched vm1...
+  📦 Processing 1000 podcasts from enriched vm1...
+  ✅ Updated: 50
+  ✅ Updated: 100
+  💾 Committed batch of 500 updates
+  ✅ Updated: 500
+  📊 Stats for enriched vm1:
+     ✅ Updated: 500
+     ⏭️  Skipped: 450
+     ❌ Errors: 0
+
+  [... continues for all 42 files ...]
+
+  ═══════════════════════════════════════════════════════════════════════════
+     ✅ IMPORT COMPLETE
+  ═══════════════════════════════════════════════════════════════════════════
+  📂 Files processed: 42/42
+     Skipped: 0
+
+  📊 Total podcasts:
+     ✅ Updated: 15,234
+     ⏭️  Skipped: 8,766
+     ❌ Errors: 0
+  ═══════════════════════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔍 AFTER IMPORT - VERIFY IN FIRESTORE:
+
+Your podcasts will now have these NEW fields (when available):
+
+  📧 EMAILS:
+     - rss_owner_email
+     - website_email
+
+  ⭐ APPLE DATA:
+     - apple_rating
+     - apple_rating_count
+     - apple_api_url
+     - apple_api_artwork_url
+     - apple_api_genres
+
+  🎙️ EPISODES (10 latest):
+     - rss_ep1_title through rss_ep10_title
+     - rss_ep1_date through rss_ep10_date
+     - rss_ep1_description through rss_ep10_description
+     - rss_ep1_duration through rss_ep10_duration
+     - rss_ep1_audio_url through rss_ep10_audio_url
+
+  📺 YOUTUBE:
+     - yt_subscribers
+     - yt_channel_name
+     - yt_channel_id
+     - yt_video_1_title through yt_video_10_title
+     - yt_video_1_views through yt_video_10_views
+     - yt_video_1_duration through yt_video_10_duration
+
+  🔗 SOCIAL MEDIA:
+     - website_facebook
+     - website_instagram
+     - website_twitter
+     - website_linkedin
+     - website_youtube
+     - website_spotify
+     - website_tiktok
+
+  📊 METADATA:
+     - importedFrom (e.g., "enriched_vm1")
+     - importedAt (timestamp)
+     - updatedAt (timestamp)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+❓ TROUBLESHOOTING:
+
+  ❌ "Error: Cannot find module 'firebase-admin'"
+     → Run: npm install firebase-admin
+
+  ❌ "node: command not found"
+     → Make sure Node.js is installed
+     → Or run with full path: "C:\Program Files\nodejs\node.exe" scripts\import_enriched_data.js
+
+  ❌ "Error: ENOENT: no such file or directory"
+     → Check you're in the right folder
+     → Run: pwd (should show: ...Dossier danielle)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ READY TO GO! Just run:
+   node scripts/import_enriched_data.js
+
+═══════════════════════════════════════════════════════════════════════════════

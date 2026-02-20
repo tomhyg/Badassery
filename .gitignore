@@ -1,0 +1,104 @@
+# =====================================================
+# SECRETS & CREDENTIALS — NEVER COMMIT THESE
+# =====================================================
+serviceAccountKey.json
+*firebase-adminsdk*.json
+.env
+.env.local
+.env.production
+.env.*.local
+webapp/badassery/.env.local
+webapp/badassery/functions/.env
+SECRETS_*.env
+
+# =====================================================
+# DEPENDENCIES — Regenerable with npm install / pip install
+# =====================================================
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# =====================================================
+# BUILD OUTPUT — Regenerable with npm run build
+# =====================================================
+dist/
+dist-ssr/
+webapp/badassery/dist/
+webapp/badassery/functions/lib/
+*.tsbuildinfo
+
+# =====================================================
+# DATA FILES — Too large for GitHub (use Google Drive)
+# =====================================================
+# PodcastIndex database (4.6 GB)
+podcastindex_feeds.db
+podcastindex_feeds.db/
+*.db
+*.tgz
+
+# Enrichment output files (~380 MB)
+podcasts_vm*.json
+enriched_vm*.json
+enriched_results/
+
+# Cache and progress files
+apple_cache.json
+rss_cache.json
+yt_data.json
+progress.json
+checkpoint_*.json
+.checkpoint.json
+
+# Test output
+test_*_results*.json
+
+# HTML scrape artifacts
+yt_page.html
+
+# =====================================================
+# LOGS
+# =====================================================
+logs/
+*.log
+enrichment_log.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =====================================================
+# OS & IDE
+# =====================================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# =====================================================
+# FIREBASE
+# =====================================================
+.firebase/
+.firebaserc
+
+# =====================================================
+# CLAUDE CODE TEMP FILES
+# =====================================================
+tmpclaude-*
+.claude/
+
+# =====================================================
+# MISC
+# =====================================================
+*.local
+remaining_split/
+nul

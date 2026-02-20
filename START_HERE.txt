@@ -1,0 +1,95 @@
+================================================================================
+                     🚀 START HERE - QUICK LAUNCH
+================================================================================
+
+Vous voulez traiter 120,000 podcasts en 14-20 heures ?
+Suivez ces 3 étapes simples:
+
+================================================================================
+  ÉTAPE 1: VALIDER (5 minutes)
+================================================================================
+
+Double-cliquez sur:
+  📄 VALIDATE_SETUP.bat
+
+Attendez le message:
+  ✅ ALL CRITICAL CHECKS PASSED (9/9 total)
+  🚀 You are ready to run the parallel scoring script!
+
+Si ❌ → Fixer les erreurs affichées
+Si ✅ → Continuer à l'Étape 2
+
+================================================================================
+  ÉTAPE 2: TESTER (10 minutes)
+================================================================================
+
+Double-cliquez sur:
+  📄 LANCER_PARALLEL.bat
+
+Dans le menu, choisir:
+  Option 1 - TEST avec 1000 podcasts
+
+Attendez 5-10 minutes
+
+Vérifiez dans Firestore Console:
+  - Collection: podcasts
+  - Filtrer: aiCategorizationStatus == 'completed'
+  - Vérifier champs: ai_badassery_score, ai_global_percentile
+
+Si OK → Continuer à l'Étape 3
+Si Erreurs → Consulter PARALLEL_SCORING_GUIDE.md
+
+================================================================================
+  ÉTAPE 3: PRODUCTION (14-20 heures)
+================================================================================
+
+Option A - RAPIDE (Tout d'un coup, plus risqué):
+  Double-cliquez: LANCER_PARALLEL.bat
+  Choisir: Option 7 (Mode AGRESSIF complet)
+  Attendez: 10-14 heures
+
+Option B - SÉCURISÉ (Par vagues, recommandé):
+  Wave 1: LANCER_PARALLEL.bat → Option 3 (3-5h)
+  Wave 2: LANCER_PARALLEL.bat → Option 4 (3-5h)
+  Wave 3: LANCER_PARALLEL.bat → Option 5 (3-5h)
+  Wave 4: LANCER_PARALLEL.bat → Option 6 (3-5h)
+
+  Total: 12-20 heures
+
+================================================================================
+  C'EST TOUT! 🎉
+================================================================================
+
+Vos 120,000 podcasts seront scorés et catégorisés.
+
+Chaque podcast aura:
+  ✅ 20 champs AI
+  ✅ Score Badassery (0-100)
+  ✅ Percentile global (Top 1%, 5%, 10%, etc.)
+  ✅ Percentile par catégorie
+  ✅ Catégorie (1 des 31 niches Badassery)
+  ✅ Topics, audience, style, etc.
+
+Coût total: ~$4.72
+
+================================================================================
+  BESOIN D'AIDE?
+================================================================================
+
+📖 Documentation:
+  - Quick Start détaillé:    QUICK_START_PARALLEL.txt
+  - Workflow complet:         WORKFLOW_GUIDE.md
+  - Troubleshooting:          PARALLEL_SCORING_GUIDE.md
+  - Navigation complète:      INDEX.md
+
+🛠️  Commandes directes (si pas Windows):
+  - Validation:  node scripts/validate_setup.js
+  - Test:        node scripts/parallel_scoring_v2.js --limit=1000
+  - Dry-run:     node scripts/parallel_scoring_v2.js --dry-run
+  - Production:  node scripts/parallel_scoring_v2.js --offset=0 --limit=30000
+
+================================================================================
+
+🚀 PRÊT? → Double-cliquez sur VALIDATE_SETUP.bat
+
+================================================================================
