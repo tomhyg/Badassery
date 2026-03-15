@@ -115,19 +115,15 @@ export async function generateMatchesForClient(
   let candidates = allPodcasts.filter(p => {
     const hasEmail = !!(p.rss_owner_email || p.website_email);
     const notExcluded = !excludeIds.has(p.itunesId);
-    const guestFriendly = p.ai_guest_friendly !== false;
 
-    return notExcluded && hasEmail && guestFriendly;
+    return notExcluded && hasEmail;
   });
 
   console.log(`[AI Matching] ${candidates.length} candidate podcasts after filtering (with email)`);
 
   if (candidates.length === 0) {
     // If no candidates with email, try without email filter as fallback
-    candidates = allPodcasts.filter(p =>
-      !excludeIds.has(p.itunesId) &&
-      p.ai_guest_friendly !== false
-    );
+    candidates = allPodcasts.filter(p => !excludeIds.has(p.itunesId));
 
     console.log(`[AI Matching] Fallback: ${candidates.length} podcasts without email filter`);
 

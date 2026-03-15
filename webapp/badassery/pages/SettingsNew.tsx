@@ -114,8 +114,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigate }) => {
                 onChange={(e) => setAiConfig({ ...aiConfig, geminiModel: e.target.value as any })}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
               >
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash - Recommended (Cheap & Fast)</option>
-                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
+                <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite - Recommended (Cheap & Fast)</option>
                 <option value="gemini-1.5-flash">Gemini 1.5 Flash - Fast & Efficient</option>
                 <option value="gemini-1.5-pro">Gemini 1.5 Pro - Most Capable</option>
               </select>

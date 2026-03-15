@@ -1,4 +1,5 @@
 import React from 'react';
+import { Info } from 'lucide-react';
 
 interface RangeSliderProps {
   label: string;
@@ -8,6 +9,7 @@ interface RangeSliderProps {
   onChange: (value: [number, number]) => void;
   step?: number;
   formatValue?: (value: number) => string;
+  tooltip?: string;
 }
 
 export const RangeSlider: React.FC<RangeSliderProps> = ({
@@ -17,7 +19,8 @@ export const RangeSlider: React.FC<RangeSliderProps> = ({
   value,
   onChange,
   step = 1,
-  formatValue = (v) => v.toString()
+  formatValue = (v) => v.toString(),
+  tooltip,
 }) => {
   const [minValue, maxValue] = value;
 
@@ -42,7 +45,17 @@ export const RangeSlider: React.FC<RangeSliderProps> = ({
   return (
     <div className="space-y-2">
       <div className="flex justify-between items-center">
-        <label className="text-sm font-medium text-slate-700">{label}</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-sm font-medium text-slate-700">{label}</label>
+          {tooltip && (
+            <div className="relative group">
+              <Info size={13} className="text-slate-400 cursor-help" />
+              <div className="absolute left-0 top-5 w-56 bg-slate-800 text-white text-xs rounded-lg p-2.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg leading-relaxed">
+                {tooltip}
+              </div>
+            </div>
+          )}
+        </div>
         <span className="text-xs text-slate-500">
           {formatValue(minValue)} - {formatValue(maxValue)}
         </span>

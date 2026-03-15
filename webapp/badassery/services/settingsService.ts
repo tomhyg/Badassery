@@ -137,8 +137,8 @@ Professional Goals: {client_goals}
 Write the pitch email now:`;
 
 const DEFAULT_AI_CONFIG: AIConfig = {
-  pitch_model: 'gemini-2.0-flash',
-  classification_model: 'gemini-2.0-flash',
+  pitch_model: 'gemini-2.0-flash-lite',
+  classification_model: 'gemini-2.0-flash-lite',
   pitch_settings: {
     max_tokens: 500,
     temperature: 0.7,

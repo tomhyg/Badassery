@@ -16,6 +16,12 @@ import {
   PodcastEmailCandidate,
   getRSSEpisodes
 } from '../services/podcastService';
+import {
+  fetchEpisodes,
+  formatPIDuration,
+  formatPIDate,
+  PIEpisode,
+} from '../services/podcastIndexService';
 import { Badge } from './Badge';
 import { getAllClients, Client, getClientById } from '../services/clientService';
 import { addToWishlist, getWishlistItem } from '../services/wishlistService';
@@ -39,7 +45,7 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
   onAddToClient,
   onStartOutreach
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'outreach' | 'activity'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'guests' | 'outreach' | 'activity'>('overview');
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -73,6 +79,12 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
   const [pitchError, setPitchError] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
 
+  // Live episodes state
+  const [liveEpisodes, setLiveEpisodes] = useState<PIEpisode[]>([]);
+  const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [episodesError, setEpisodesError] = useState<string | null>(null);
+  const [expandedEpisodes, setExpandedEpisodes] = useState<Set<number>>(new Set());
+
   const emails = getPodcastEmails(podcast);
   const socialLinks = getPodcastSocialLinks(podcast);
 
@@ -88,6 +100,18 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
     if (activeTab === 'outreach' && outreachHistory.length === 0) {
       loadOutreachHistory();
     }
+  }, [activeTab]);
+
+  // Fetch live episodes from PodcastIndex when episodes tab is opened
+  useEffect(() => {
+    if (activeTab !== 'episodes') return;
+    if (liveEpisodes.length > 0 || episodesLoading) return; // already loaded
+    setEpisodesLoading(true);
+    setEpisodesError(null);
+    fetchEpisodes({ itunesId: podcast.itunesId, id: podcast.id })
+      .then(eps => setLiveEpisodes(eps))
+      .catch(err => setEpisodesError(err.message ?? 'Failed to load episodes'))
+      .finally(() => setEpisodesLoading(false));
   }, [activeTab]);
 
   // Close dropdown when clicking outside
@@ -348,7 +372,7 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
           subject: editedSubject,
           body: editedPitch,
           generated_by_ai: true,
-          ai_model_used: 'gemini-2.0-flash',
+          ai_model_used: 'gemini-2.0-flash-lite',
           original_ai_body: generatedPitch,
           edited_by_user: editedPitch !== generatedPitch,
           sent_at: Timestamp.now(),
@@ -503,6 +527,36 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
     return html.replace(/<[^>]*>/g, '').trim();
   };
 
+  // Extract a guest name from an episode title using regex heuristics.
+  // Returns null if no confident match is found.
+  const extractGuest = (title: string): string | null => {
+    const name = /(?:^|[–\-|•])\s*([A-Z][a-zÀ-ÿ']+(?:\s+[A-Z][a-zÀ-ÿ']+){1,3})\s*(?:[–\-|•]|$)/;
+    const patterns: RegExp[] = [
+      /\bwith\s+([A-Z][a-zÀ-ÿ']+(?:\s+[A-Z][a-zÀ-ÿ']+){1,3})/,
+      /\bfeaturing\s+([A-Z][a-zÀ-ÿ']+(?:\s+[A-Z][a-zÀ-ÿ']+){1,3})/i,
+      /\binterview(?:ing|s)?\s+([A-Z][a-zÀ-ÿ']+(?:\s+[A-Z][a-zÀ-ÿ']+){1,3})/i,
+      /^(?:Ep\.?\s*\d+\s*[-:|]?\s*)?([A-Z][a-zÀ-ÿ']+(?:\s+[A-Z][a-zÀ-ÿ']+){1,3})\s*[:\|–]/,
+      name,
+    ];
+    // Common false-positive words to reject
+    const stopWords = new Set([
+      'The', 'How', 'Why', 'What', 'When', 'Where', 'Who', 'This', 'That',
+      'From', 'Into', 'Building', 'Growing', 'Using', 'Making', 'Getting',
+      'Podcast', 'Episode', 'Part', 'Special', 'Season', 'Show', 'Live',
+    ]);
+    for (const re of patterns) {
+      const m = title.match(re);
+      if (m) {
+        const candidate = m[1].trim();
+        const first = candidate.split(' ')[0];
+        if (!stopWords.has(first) && candidate.split(' ').length >= 2) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
@@ -646,6 +700,7 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
             {[
               { id: 'overview', label: '📊 Overview', icon: BarChart3 },
               { id: 'episodes', label: '🎧 Episodes', icon: Calendar },
+              { id: 'guests',   label: '👤 Guests',   icon: Users },
               { id: 'outreach', label: '📧 Outreach History', icon: Mail },
               { id: 'activity', label: '📜 Activity', icon: Clock }
             ].map((tab) => (
@@ -704,22 +759,69 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-lg p-4">
-                  <div className="text-sm text-purple-600 font-medium mb-1">Avg Length</div>
-                  <div className="text-2xl font-bold text-purple-900">
-                    {podcast.rss_ep1_duration || 'N/A'}
-                  </div>
-                  <div className="text-xs text-purple-600 mt-1">
-                    Per episode
-                  </div>
-                </div>
               </div>
 
+              {/* Apple Charts */}
+              {(podcast.apple_chart_genres || podcast.apple_chart_rank) && (() => {
+                const entries = podcast.apple_chart_genres
+                  ? Object.entries(podcast.apple_chart_genres).sort(([, a], [, b]) => a - b)
+                  : [[podcast.apple_chart_genre!, podcast.apple_chart_rank!] as [string, number]];
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-amber-700 uppercase tracking-wide mr-1">Apple Charts</span>
+                      {entries.map(([genre, rank]) => (
+                        <span
+                          key={genre}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                            rank === 1   ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                            rank <= 3    ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                            rank <= 10   ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                                           'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}
+                        >
+                          🏆 #{rank} in {genre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Spotify Charts */}
+              {(podcast.spotify_chart_genres || podcast.spotify_chart_rank) && (() => {
+                const entries = podcast.spotify_chart_genres
+                  ? Object.entries(podcast.spotify_chart_genres).sort(([, a], [, b]) => a - b)
+                  : [[podcast.spotify_chart_genre!, podcast.spotify_chart_rank!] as [string, number]];
+                return (
+                  <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-green-700 uppercase tracking-wide mr-1">Spotify Charts</span>
+                      {entries.map(([genre, rank]) => (
+                        <span
+                          key={genre}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                            rank === 1   ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                            rank <= 3    ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                            rank <= 10   ? 'bg-green-100 text-green-800 border-green-300' :
+                                           'bg-green-50 text-green-700 border-green-200'
+                          }`}
+                        >
+                          🎵 #{rank} in {genre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Description */}
-              {podcast.ai_summary && (
+              {(podcast.ai_summary || podcast.description) && (
                 <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-                  <h3 className="text-sm font-bold text-slate-900 mb-2 uppercase tracking-wide">Summary</h3>
-                  <p className="text-slate-700 leading-relaxed">{podcast.ai_summary}</p>
+                  <h3 className="text-sm font-bold text-slate-900 mb-2 uppercase tracking-wide">Description</h3>
+                  <p className="text-slate-700 leading-relaxed">
+                    {podcast.ai_summary || stripHtml(podcast.description || '')}
+                  </p>
                 </div>
               )}
 
@@ -777,12 +879,6 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                         {podcast.ai_content_quality?.toFixed(1) || 'N/A'}/10
                       </span>
                     </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs text-slate-500">Guest Friendly</span>
-                      <span className="text-sm font-bold text-slate-900">
-                        {podcast.ai_guest_friendly ? '✅ Yes' : '❌ No'}
-                      </span>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -794,9 +890,10 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                   Contact
                 </h3>
 
-                {emails.length > 0 ? (
-                  <div className="space-y-3">
-                    {emails.map((emailCandidate, idx) => (
+                <div className="space-y-3">
+                  {/* Emails list */}
+                  {emails.length > 0 ? (
+                    emails.map((emailCandidate, idx) => (
                       <div key={idx} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex items-center gap-2">
@@ -813,7 +910,6 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                               </a>
                             </div>
                           </div>
-
                           <button
                             onClick={() => handleCopyEmail(emailCandidate.email)}
                             className="p-1.5 hover:bg-slate-200 rounded transition-colors"
@@ -826,27 +922,38 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                             )}
                           </button>
                         </div>
-
-                        {/* Sources */}
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="text-slate-500">Sources:</span>
+                          <span className="text-slate-500">Source:</span>
                           {emailCandidate.sources.map((source, sIdx) => (
-                            <span
-                              key={sIdx}
-                              className="px-2 py-0.5 bg-green-100 text-green-700 rounded border border-green-200 flex items-center gap-1"
-                            >
+                            <span key={sIdx} className="px-2 py-0.5 bg-green-100 text-green-700 rounded border border-green-200">
                               {source} ✓
                             </span>
                           ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">
-                    No email addresses available
-                  </div>
-                )}
+                    ))
+                  ) : (
+                    <div className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-200">
+                      No email found
+                    </div>
+                  )}
+
+                  {/* Fallback: website link when website_email is missing */}
+                  {!podcast.website_email && (podcast.website || podcast.rss_website) && (
+                    <div>
+                      <div className="text-xs text-slate-400 mb-2">No scraped email — visit the website to find a contact:</div>
+                      <a
+                        href={(podcast.website || podcast.rss_website || '').replace(/\/$/, '')}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-200 transition-colors inline-flex items-center gap-1.5 text-xs font-medium"
+                      >
+                        <ExternalLink size={12} />
+                        Visit website
+                      </a>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Quick Actions */}
@@ -910,54 +1017,54 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                 <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">Links</h3>
                 <div className="flex flex-wrap gap-2">
                   {socialLinks.youtube && (
-                    <a
-                      href={socialLinks.youtube}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 text-sm font-medium"
-                    >
-                      <Youtube size={16} />
-                      YouTube
+                    <a href={socialLinks.youtube} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Youtube size={16} /> YouTube
                     </a>
                   )}
-
+                  {socialLinks.instagram && (
+                    <a href={socialLinks.instagram} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-pink-50 text-pink-700 border border-pink-200 rounded-lg hover:bg-pink-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Instagram size={16} /> Instagram
+                    </a>
+                  )}
+                  {socialLinks.twitter && (
+                    <a href={socialLinks.twitter} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Twitter size={16} /> X / Twitter
+                    </a>
+                  )}
+                  {socialLinks.facebook && (
+                    <a href={socialLinks.facebook} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <ExternalLink size={16} /> Facebook
+                    </a>
+                  )}
+                  {socialLinks.linkedin && (
+                    <a href={socialLinks.linkedin} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Linkedin size={16} /> LinkedIn
+                    </a>
+                  )}
+                  {socialLinks.tiktok && (
+                    <a href={socialLinks.tiktok} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <ExternalLink size={16} /> TikTok
+                    </a>
+                  )}
                   {socialLinks.website && (
-                    <a
-                      href={socialLinks.website}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium"
-                    >
-                      <Globe size={16} />
-                      Website
+                    <a href={socialLinks.website} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Globe size={16} /> Website
                     </a>
                   )}
-
                   {podcast.apple_api_url && (
-                    <a
-                      href={podcast.apple_api_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium"
-                    >
+                    <a href={podcast.apple_api_url} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
                       </svg>
                       Apple Podcasts
-                    </a>
-                  )}
-
-                  {podcast.rss_url && (
-                    <a
-                      href={podcast.rss_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors flex items-center gap-2 text-sm font-medium"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20A2.18 2.18 0 0 1 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/>
-                      </svg>
-                      RSS Feed
                     </a>
                   )}
                 </div>
@@ -967,86 +1074,191 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
 
           {activeTab === 'episodes' && (
             <div className="space-y-4">
-              {(() => {
-                const episodes = getRSSEpisodes(podcast);
+              {/* Loading */}
+              {episodesLoading && (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                  <Loader2 size={36} className="animate-spin text-purple-500 mb-3" />
+                  <p className="text-sm">Loading episodes from PodcastIndex...</p>
+                </div>
+              )}
 
-                if (episodes.length === 0) {
+              {/* Error */}
+              {episodesError && !episodesLoading && (
+                <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+                  <AlertCircle size={36} className="text-red-400 mb-3" />
+                  <p className="text-sm font-medium text-red-600 mb-1">Failed to load episodes</p>
+                  <p className="text-xs text-slate-400">{episodesError}</p>
+                </div>
+              )}
+
+              {/* Episodes list */}
+              {!episodesLoading && !episodesError && liveEpisodes.length === 0 && (
+                <div className="text-center text-slate-500 py-12">
+                  <Headphones size={48} className="mx-auto mb-4 opacity-30" />
+                  <p className="text-lg font-medium mb-2">No episodes found</p>
+                  <p className="text-sm">This podcast may not be indexed by PodcastIndex.</p>
+                </div>
+              )}
+
+              {!episodesLoading && liveEpisodes.length > 0 && (
+                <>
+                  {(() => {
+                    const withDuration = liveEpisodes.filter(e => e.duration > 0);
+                    const avgSec = withDuration.length > 0
+                      ? Math.round(withDuration.reduce((sum, e) => sum + e.duration, 0) / withDuration.length)
+                      : 0;
+                    return avgSec > 0 ? (
+                      <div className="flex items-center gap-2 text-sm text-slate-600 bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3">
+                        <Clock size={14} className="text-purple-500" />
+                        <span>Avg episode length: <strong className="text-purple-800">{formatPIDuration(avgSec)}</strong></span>
+                        <span className="text-slate-400 text-xs">(based on {withDuration.length} episodes)</span>
+                      </div>
+                    ) : null;
+                  })()}
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                      <Headphones size={20} className="text-purple-600" />
+                      Recent Episodes ({liveEpisodes.length})
+                    </h3>
+                  </div>
+
+                  {liveEpisodes.map((episode, idx) => {
+                    const isExpanded = expandedEpisodes.has(episode.id);
+                    const description = stripHtml(episode.description || '');
+                    return (
+                      <div
+                        key={episode.id}
+                        className="bg-white border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                      >
+                        <div className="flex items-start gap-4">
+                          {/* Episode Number Badge */}
+                          <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                            {idx + 1}
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            {/* Title */}
+                            <h4 className="font-semibold text-slate-900 mb-1 leading-snug">
+                              {episode.title || `Episode ${idx + 1}`}
+                            </h4>
+
+                            {/* Meta */}
+                            <div className="flex items-center gap-4 text-xs text-slate-500 mb-2">
+                              {episode.datePublished > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Calendar size={12} />
+                                  {formatPIDate(episode.datePublished)}
+                                </span>
+                              )}
+                              {episode.duration > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <Clock size={12} />
+                                  {formatPIDuration(episode.duration)}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Description — 2 lines, expandable */}
+                            {description && (
+                              <div className="mb-2">
+                                <p className={`text-sm text-slate-600 ${isExpanded ? '' : 'line-clamp-2'}`}>
+                                  {description}
+                                </p>
+                                {description.length > 120 && (
+                                  <button
+                                    onClick={() => setExpandedEpisodes(prev => {
+                                      const next = new Set(prev);
+                                      isExpanded ? next.delete(episode.id) : next.add(episode.id);
+                                      return next;
+                                    })}
+                                    className="text-xs text-purple-600 hover:text-purple-800 font-medium mt-0.5"
+                                  >
+                                    {isExpanded ? 'Show less' : 'Show more'}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Actions */}
+                            {episode.enclosureUrl && (
+                              <a
+                                href={episode.enclosureUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-600 text-white text-xs rounded-lg hover:bg-purple-700 transition-colors font-medium"
+                              >
+                                <Play size={12} />
+                                Listen
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'guests' && (
+            <div className="space-y-4">
+              {(() => {
+                // Build a deduplicated map: name → first episode title it appeared in
+                const guestMap = new Map<string, string>();
+                for (const ep of liveEpisodes) {
+                  const guest = extractGuest(ep.title);
+                  if (guest && !guestMap.has(guest)) {
+                    guestMap.set(guest, ep.title);
+                  }
+                }
+                const guests = Array.from(guestMap.entries());
+
+                if (liveEpisodes.length === 0) {
                   return (
                     <div className="text-center text-slate-500 py-12">
-                      <Headphones size={48} className="mx-auto mb-4 opacity-30" />
-                      <p className="text-lg font-medium mb-2">No episodes available</p>
-                      <p className="text-sm">Episode data hasn't been fetched for this podcast yet.</p>
+                      <Users size={48} className="mx-auto mb-4 opacity-30" />
+                      <p className="text-sm">Open the Episodes tab first to load episode data.</p>
+                    </div>
+                  );
+                }
+
+                if (guests.length === 0) {
+                  return (
+                    <div className="text-center text-slate-500 py-12">
+                      <Users size={48} className="mx-auto mb-4 opacity-30" />
+                      <p className="text-lg font-medium mb-2">No guests detected in recent episode titles</p>
+                      <p className="text-sm">Guest names couldn't be extracted from the {liveEpisodes.length} episode titles fetched.</p>
                     </div>
                   );
                 }
 
                 return (
                   <>
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-2">
                       <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                        <Headphones size={20} className="text-purple-600" />
-                        Recent Episodes ({episodes.length})
+                        <Users size={20} className="text-purple-600" />
+                        Detected Guests ({guests.length})
                       </h3>
+                      <span className="text-xs text-slate-400">from {liveEpisodes.length} episodes</span>
                     </div>
 
-                    {episodes.map((episode, idx) => (
-                      <div
-                        key={episode.guid || idx}
-                        className="bg-white border border-slate-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                      >
-                        <div className="flex items-start gap-4">
-                          {/* Episode Number Badge */}
-                          <div className="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-sm">
-                            {idx + 1}
+                    <div className="grid grid-cols-1 gap-3">
+                      {guests.map(([name, episodeTitle]) => (
+                        <div
+                          key={name}
+                          className="flex items-start gap-3 bg-white border border-slate-200 rounded-lg p-3 hover:shadow-sm transition-shadow"
+                        >
+                          <div className="flex-shrink-0 w-9 h-9 bg-gradient-to-br from-purple-100 to-indigo-100 rounded-full flex items-center justify-center text-purple-600">
+                            <Users size={16} />
                           </div>
-
                           <div className="flex-1 min-w-0">
-                            {/* Episode Title */}
-                            <h4 className="font-bold text-slate-900 mb-2 line-clamp-2">
-                              {episode.title || `Episode ${idx + 1}`}
-                            </h4>
-
-                            {/* Episode Meta */}
-                            <div className="flex items-center gap-4 text-sm text-slate-600 mb-2">
-                              {episode.date && (
-                                <span className="flex items-center gap-1.5">
-                                  <Calendar size={14} className="text-slate-400" />
-                                  {formatEpisodeDate(episode.date)}
-                                </span>
-                              )}
-                              {episode.duration && (
-                                <span className="flex items-center gap-1.5">
-                                  <Clock size={14} className="text-slate-400" />
-                                  {episode.duration}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Episode Description */}
-                            {episode.description && (
-                              <p className="text-sm text-slate-600 line-clamp-2 mb-3">
-                                {stripHtml(episode.description)}
-                              </p>
-                            )}
-
-                            {/* Episode Actions */}
-                            <div className="flex items-center gap-2">
-                              {episode.audioUrl && (
-                                <a
-                                  href={episode.audioUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-1.5 font-medium"
-                                >
-                                  <Play size={14} />
-                                  Listen
-                                </a>
-                              )}
-                            </div>
+                            <p className="font-semibold text-slate-900">{name}</p>
+                            <p className="text-xs text-slate-500 truncate mt-0.5">{episodeTitle}</p>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </>
                 );
               })()}

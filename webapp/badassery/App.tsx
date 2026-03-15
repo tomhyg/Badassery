@@ -16,6 +16,8 @@ import { ClientPortal } from './pages/ClientPortal';
 import { Login } from './pages/Login';
 import { ClientLogin } from './pages/ClientLogin';
 import { AIMatching } from './pages/AIMatching';
+import { AppleCharts } from './pages/AppleCharts';
+import { SpotifyCharts } from './pages/SpotifyCharts';
 import { TestDataGenerator } from './pages/TestDataGenerator';
 import { DevRoleSwitcher } from './components/DevRoleSwitcher';
 import { currentUser as initialUser, podcasts, clients, outreachItems, activityLogs } from './services/mockData';
@@ -186,6 +188,10 @@ const App: React.FC = () => {
         return <PodcastsReal />;
       case 'podcasts-new':
         return <div className="p-6"><h1 className="text-2xl font-bold">Add New Podcast (Coming Soon)</h1></div>;
+      case 'apple-charts':
+        return <AppleCharts />;
+      case 'spotify-charts':
+        return <SpotifyCharts />;
 
       // Clients routes
       case 'clients':

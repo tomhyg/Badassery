@@ -236,7 +236,7 @@ async function testGeminiAPI() {
   try {
     const apiKey = process.env.GEMINI_API_KEY || 'AIzaSyBDRKIQEEDiEkX0GkOYSSZkuesG-QIsyr4';
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
 
     const startTime = Date.now();
     const result = await model.generateContent('Say "OK" if you can hear me.');

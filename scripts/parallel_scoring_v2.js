@@ -13,16 +13,21 @@
  * - Dry-run mode
  *
  * Usage:
- *   node scripts/parallel_scoring_v2.js                          # Process all
- *   node scripts/parallel_scoring_v2.js --limit=1000             # Test with 1000
- *   node scripts/parallel_scoring_v2.js --offset=0 --limit=30000 # Wave 1
- *   node scripts/parallel_scoring_v2.js --dry-run                # No Firestore writes
+ *   node scripts/parallel_scoring_v2.js                                          # Process all
+ *   node scripts/parallel_scoring_v2.js --limit=1000                             # Test with 1000
+ *   node scripts/parallel_scoring_v2.js --offset=0 --limit=30000                 # Wave 1
+ *   node scripts/parallel_scoring_v2.js --dry-run                                # No Firestore writes
+ *   node scripts/parallel_scoring_v2.js --scores-only --input-file=data/x.json  # Skip Gemini, recalculate scores only
  */
 
+require('dotenv').config();
 const admin = require('firebase-admin');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
+const { GeminiKeyPool } = require('./utils/rateLimiter');
+const { retryWithBackoff } = require('./utils/retryWithBackoff');
+// Shared scoring logic (also used by weekly_pipeline.js)
+const { BADASSERY_NICHES: _NICHES, BADASSERY_TOPICS: _TOPICS } = require('./utils/geminiScorer');
 
 // ============================================================================
 // CONFIGURATION
@@ -58,13 +63,29 @@ const CONFIG = CONFIGS[CONFIG_MODE] || CONFIGS.safe;
 const DRY_RUN = args.includes('--dry-run');
 const OFFSET = parseInt(getArg('offset', '0'));
 const LIMIT = parseInt(getArg('limit', '999999'));
-const CHECKPOINT_INTERVAL = 1000;
+const INPUT_FILE = getArg('input-file', null);
+const SCORES_ONLY = args.includes('--scores-only');
+const CHECKPOINT_INTERVAL = 100; // Every 100 podcasts (was 1000 — reduces data loss on interruption)
 const CHECKPOINT_FILE = path.join(__dirname, '../.checkpoint.json');
 const MAX_CONSECUTIVE_ERRORS = 10;
 const MEMORY_CHECK_INTERVAL = 100; // Check memory every 100 podcasts
+const GEMINI_RATE_LIMIT = parseInt(getArg('rate-limit', '10')); // req/sec per key
+const GEMINI_WORKERS = parseInt(getArg('workers', String(CONFIG.geminiParallel))); // --workers=N overrides config
+
+// Gemini API keys — set GEMINI_API_KEYS="key1,key2,key3" for multi-key rotation
+// or GEMINI_API_KEY="single_key"
+const GEMINI_API_KEYS = [
+  ...( (process.env.GEMINI_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean) ),
+  ...(process.env.GEMINI_API_KEY ? [process.env.GEMINI_API_KEY] : []),
+].filter((k, i, arr) => k && arr.indexOf(k) === i); // deduplicate
+
+if (GEMINI_API_KEYS.length === 0) {
+  console.error('[Fatal] No Gemini API key found. Set GEMINI_API_KEY or GEMINI_API_KEYS env var.');
+  process.exit(1);
+}
 
 // Initialize Firebase Admin
-const serviceAccount = require('../brooklynn-61dc8-firebase-adminsdk-fbsvc-e27129f5dc.json');
+const serviceAccount = require('../serviceAccountKey.json');
 
 if (!admin.apps.length) {
   admin.initializeApp({
@@ -74,9 +95,8 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyBDRKIQEEDiEkX0GkOYSSZkuesG-QIsyr4');
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+// Initialize Gemini key pool (rate-limited, supports multiple keys via GEMINI_API_KEYS)
+const keyPool = new GeminiKeyPool(GEMINI_API_KEYS, GEMINI_RATE_LIMIT);
 
 // ============================================================================
 // BADASSERY NICHES & TOPICS (Same as original)
@@ -465,9 +485,11 @@ function calculatePowerScore(podcast) {
 // GEMINI CATEGORIZATION (Parallel)
 // ============================================================================
 
-async function categorizeSinglePodcast(podcast, retries = 2) {
+async function categorizeSinglePodcast(podcast, maxRetries = 3) {
   /**
-   * Categorize a SINGLE podcast with Gemini (for parallel processing)
+   * Categorize a SINGLE podcast with Gemini.
+   * Uses module-level keyPool for rate limiting + key rotation.
+   * Retries with exponential backoff + ±20% jitter.
    */
 
   const prompt = `You are a podcast categorization expert for "Badassery PR", a podcast booking agency.
@@ -489,7 +511,7 @@ Also identify:
 - Target audience (brief description)
 - Podcast style (Interview/Solo Commentary/Panel Discussion/Storytelling/Educational/Other)
 - Business relevance score (1-10, where 10 = highly relevant to business professionals)
-- Is it guest-friendly? (true if they regularly have guests)
+- guest_friendly: true ONLY if the description or episode titles clearly indicate recurring interviews with different external guests. Return false for: solo shows, daily news briefs, monologues, audio dramas, fiction, scripture readings, meditation guides, or any format without named external guests.
 - A unique 2-3 sentence summary
 
 Return ONLY valid JSON (no markdown):
@@ -504,91 +526,95 @@ Return ONLY valid JSON (no markdown):
   "summary": "2-3 sentence unique summary"
 }`;
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      let text = response.text().trim();
+  let text = ''; // declared outside try so catch can access it for debug logging
 
-      // Clean JSON - Enhanced cleaning for control characters and quotes
-      text = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+  try {
+    await retryWithBackoff(
+      async () => {
+        const geminiModel = await keyPool.acquire(); // rate-limited, key-rotating
+        const result = await geminiModel.generateContent(prompt);
+        const response = await result.response;
+        text = response.text().trim();
 
-      const jsonStart = Math.min(
-        text.indexOf('{') >= 0 ? text.indexOf('{') : Infinity
-      );
-      if (jsonStart !== Infinity && jsonStart > 0) {
-        text = text.substring(jsonStart);
-      }
+        // Clean JSON - Enhanced cleaning for control characters and quotes
+        text = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
 
-      const jsonEnd = text.lastIndexOf('}');
-      if (jsonEnd >= 0) {
-        text = text.substring(0, jsonEnd + 1);
-      }
+        const jsonStart = Math.min(
+          text.indexOf('{') >= 0 ? text.indexOf('{') : Infinity
+        );
+        if (jsonStart !== Infinity && jsonStart > 0) {
+          text = text.substring(jsonStart);
+        }
 
-      // Remove comments
-      text = text.replace(/\/\/.*$/gm, '');
-      text = text.replace(/\/\*[\s\S]*?\*\//g, '');
+        const jsonEnd = text.lastIndexOf('}');
+        if (jsonEnd >= 0) {
+          text = text.substring(0, jsonEnd + 1);
+        }
 
-      // ENHANCED: Replace control characters INCLUDING newlines within string values
-      // First, protect escaped characters
-      text = text.replace(/\\n/g, '__ESCAPED_NEWLINE__');
-      text = text.replace(/\\"/g, '__ESCAPED_QUOTE__');
-      text = text.replace(/\\\\/g, '__ESCAPED_BACKSLASH__');
+        // Remove comments
+        text = text.replace(/\/\/.*$/gm, '');
+        text = text.replace(/\/\*[\s\S]*?\*\//g, '');
 
-      // Remove ALL control chars including \n, \r, \t
-      text = text.replace(/[\x00-\x1F\x7F]/g, ' ');
+        // ENHANCED: Replace control characters INCLUDING newlines within string values
+        // First, protect escaped characters
+        text = text.replace(/\\n/g, '__ESCAPED_NEWLINE__');
+        text = text.replace(/\\"/g, '__ESCAPED_QUOTE__');
+        text = text.replace(/\\\\/g, '__ESCAPED_BACKSLASH__');
 
-      // Fix unescaped quotes inside string values (between ": and ")
-      // This regex finds string values and escapes any unescaped quotes inside them
-      text = text.replace(/":\s*"([^"]*(?:"[^"]*)*?)"/g, (match, content) => {
-        // Restore escaped quotes temporarily
-        let fixed = content.replace(/__ESCAPED_QUOTE__/g, '\\"');
-        return '": "' + fixed + '"';
-      });
+        // Remove ALL control chars including \n, \r, \t
+        text = text.replace(/[\x00-\x1F\x7F]/g, ' ');
 
-      // Restore properly escaped characters
-      text = text.replace(/__ESCAPED_NEWLINE__/g, '\\n');
-      text = text.replace(/__ESCAPED_QUOTE__/g, '\\"');
-      text = text.replace(/__ESCAPED_BACKSLASH__/g, '\\\\');
+        // Fix unescaped quotes inside string values (between ": and ")
+        // This regex finds string values and escapes any unescaped quotes inside them
+        text = text.replace(/":\s*"([^"]*(?:"[^"]*)*?)"/g, (match, content) => {
+          // Restore escaped quotes temporarily
+          let fixed = content.replace(/__ESCAPED_QUOTE__/g, '\\"');
+          return '": "' + fixed + '"';
+        });
 
-      // Fix common JSON issues
-      text = text.replace(/,\s*([}\]])/g, '$1');
-      text = text.replace(/'\s*:/g, '":');
-      text = text.replace(/:\s*'/g, ':"');
-      text = text.replace(/'([^']*)'(?=\s*[,}\]])/g, '"$1"');
+        // Restore properly escaped characters
+        text = text.replace(/__ESCAPED_NEWLINE__/g, '\\n');
+        text = text.replace(/__ESCAPED_QUOTE__/g, '\\"');
+        text = text.replace(/__ESCAPED_BACKSLASH__/g, '\\\\');
 
-      // Clean up multiple spaces
-      text = text.replace(/\s+/g, ' ');
+        // Fix common JSON issues
+        text = text.replace(/,\s*([}\]])/g, '$1');
+        text = text.replace(/'\s*:/g, '":');
+        text = text.replace(/:\s*'/g, ':"');
+        text = text.replace(/'([^']*)'(?=\s*[,}\]])/g, '"$1"');
 
-      const aiResult = JSON.parse(text);
-      return { success: true, data: aiResult };
+        // Clean up multiple spaces
+        text = text.replace(/\s+/g, ' ');
 
-    } catch (error) {
-      // Log the actual error for debugging
-      console.log(`\n⚠️  Gemini error (attempt ${attempt}/${retries}):`, error.message);
-
-      // DEBUG: Show first 500 chars of problematic JSON on last attempt
-      if (attempt === retries && text) {
-        console.log(`   Raw JSON (${text.length} chars): ${text.substring(0, 500)}...`);
-        // Show the problematic area (around the error position if available)
-        const errorMatch = error.message.match(/position (\d+)/);
-        if (errorMatch) {
-          const errorPos = parseInt(errorMatch[1]);
-          const start = Math.max(0, errorPos - 50);
-          const end = Math.min(text.length, errorPos + 50);
-          console.log(`   Around error: ...${text.substring(start, end)}...`);
+        // Throws on parse error → triggers retry
+        JSON.parse(text);
+      },
+      {
+        maxRetries,
+        baseDelayMs: 1000,
+        maxDelayMs: 120000,
+        onRetry: (err, attempt, delayMs) => {
+          console.log(`\n⚠️  Gemini error (attempt ${attempt}/${maxRetries}): ${err.message}`);
+          if (text) {
+            console.log(`   Raw JSON (${text.length} chars): ${text.substring(0, 500)}...`);
+            const errorMatch = err.message.match(/position (\d+)/);
+            if (errorMatch) {
+              const errorPos = parseInt(errorMatch[1]);
+              const start = Math.max(0, errorPos - 50);
+              const end = Math.min(text.length, errorPos + 50);
+              console.log(`   Around error: ...${text.substring(start, end)}...`);
+            }
+          }
+          console.log(`   Retrying in ${delayMs}ms...`);
         }
       }
+    );
 
-      if (attempt < retries) {
-        await sleep(1000);
-      } else {
-        return { success: false, error: error.message };
-      }
-    }
+    return { success: true, data: JSON.parse(text) };
+
+  } catch (error) {
+    return { success: false, error: error.message };
   }
-
-  return { success: false, error: 'Max retries exceeded' };
 }
 
 // ============================================================================
@@ -658,13 +684,16 @@ async function main() {
   console.log('   🚀 PARALLEL PODCAST SCORING V2.0');
   console.log('='.repeat(80));
   console.log(`⚙️  Configuration: ${CONFIG_MODE} (${CONFIG.description})`);
-  console.log(`   - Gemini parallel: ${CONFIG.geminiParallel}`);
+  console.log(`   - Gemini parallel: ${GEMINI_WORKERS}`);
   console.log(`   - Firestore parallel: ${CONFIG.firestoreParallel}`);
   console.log(`📊 Processing range: OFFSET=${OFFSET}, LIMIT=${LIMIT}`);
   console.log(`💾 Checkpointing: Every ${CHECKPOINT_INTERVAL} podcasts`);
   console.log(`🔧 Circuit breaker: ${MAX_CONSECUTIVE_ERRORS} consecutive errors`);
   if (DRY_RUN) {
     console.log(`⚠️  DRY-RUN MODE: No Firestore writes`);
+  }
+  if (SCORES_ONLY) {
+    console.log(`⚡ SCORES-ONLY MODE: Skip Gemini, run Phase 2+3+4b only`);
   }
   console.log('='.repeat(80));
   console.log('');
@@ -677,64 +706,77 @@ async function main() {
     const checkpoint = loadCheckpoint();
     const resumeFromId = checkpoint?.lastProcessedId || null;
 
-    // Fetch podcasts
-    log('📂 Fetching podcasts from Firestore...');
-
-    // Strategy: We need to find podcasts WITHOUT ai_badassery_score
-    // Firestore limitation: Can't efficiently query for missing fields or null values
-    // Solution: Load in batches and filter, until we have LIMIT uncategorized podcasts
-
+    // Fetch podcasts — from JSON file or Firestore
     let podcasts = [];
-    let lastDoc = null;
-    const BATCH_SIZE = 1000; // Load 1000 at a time
-    let totalFetched = 0;
 
-    log(`Loading podcasts in batches (batch size: ${BATCH_SIZE})...`);
-    log(`Strategy: Scan entire collection to find podcasts without ai_badassery_score`);
-    log(`⚠️  Memory limit: Will stop loading at 10,000 uncategorized to avoid OOM`);
+    if (INPUT_FILE) {
+      log(`📂 Loading podcasts from file: ${INPUT_FILE}`);
+      const raw = JSON.parse(fs.readFileSync(path.resolve(INPUT_FILE), 'utf8'));
+      // Ensure itunesId is always a string (SQLite stores as number)
+      let rows = raw.map(r => ({ ...r, itunesId: String(r.itunesId) }));
+      // Apply offset/limit
+      if (OFFSET > 0) rows = rows.slice(OFFSET);
+      if (LIMIT < rows.length) rows = rows.slice(0, LIMIT);
+      podcasts = rows;
+      log(`✅ Loaded ${podcasts.length} podcasts from file`, 'SUCCESS');
+    } else {
+      log('📂 Fetching podcasts from Firestore...');
 
-    const MAX_UNCATEGORIZED = 10000; // Prevent OOM by limiting array size
+      // Strategy: We need to find podcasts WITHOUT ai_badassery_score
+      // Firestore limitation: Can't efficiently query for missing fields or null values
+      // Solution: Load in batches and filter, until we have LIMIT uncategorized podcasts
 
-    while (podcasts.length < Math.min(LIMIT, MAX_UNCATEGORIZED) && totalFetched < 300000) { // Safety limit: max 300K
-      // Use document ID for consistent ordering (no index needed)
-      let batchQuery = db.collection('podcasts')
-        .orderBy(admin.firestore.FieldPath.documentId());
+      let lastDoc = null;
+      const BATCH_SIZE = 1000; // Load 1000 at a time
+      let totalFetched = 0;
 
-      if (OFFSET > 0 && totalFetched === 0) {
-        batchQuery = batchQuery.offset(OFFSET);
-      }
+      log(`Loading podcasts in batches (batch size: ${BATCH_SIZE})...`);
+      log(`Strategy: Scan entire collection to find podcasts without ai_badassery_score`);
+      log(`⚠️  Memory limit: Will stop loading at 10,000 uncategorized to avoid OOM`);
 
-      if (lastDoc) {
-        batchQuery = batchQuery.startAfter(lastDoc);
-      }
+      const MAX_UNCATEGORIZED = 10000; // Prevent OOM by limiting array size
 
-      batchQuery = batchQuery.limit(BATCH_SIZE);
+      while (podcasts.length < Math.min(LIMIT, MAX_UNCATEGORIZED) && totalFetched < 300000) { // Safety limit: max 300K
+        // Use document ID for consistent ordering (no index needed)
+        let batchQuery = db.collection('podcasts')
+          .orderBy(admin.firestore.FieldPath.documentId());
 
-      const snapshot = await batchQuery.get();
+        if (OFFSET > 0 && totalFetched === 0) {
+          batchQuery = batchQuery.offset(OFFSET);
+        }
 
-      if (snapshot.empty) {
-        log('No more podcasts in database');
-        break;
-      }
+        if (lastDoc) {
+          batchQuery = batchQuery.startAfter(lastDoc);
+        }
 
-      // Filter for podcasts without scores
-      const uncategorizedInBatch = snapshot.docs
-        .map(doc => ({
-          ...doc.data(),
-          itunesId: doc.id
-        }))
-        .filter(p => !p.ai_badassery_score);
+        batchQuery = batchQuery.limit(BATCH_SIZE);
 
-      podcasts.push(...uncategorizedInBatch);
-      totalFetched += snapshot.docs.length;
-      lastDoc = snapshot.docs[snapshot.docs.length - 1];
+        const snapshot = await batchQuery.get();
 
-      log(`Fetched ${totalFetched} total, found ${podcasts.length} uncategorized so far...`);
+        if (snapshot.empty) {
+          log('No more podcasts in database');
+          break;
+        }
 
-      // Stop if we have enough
-      if (podcasts.length >= LIMIT) {
-        podcasts = podcasts.slice(0, LIMIT);
-        break;
+        // Filter for podcasts without scores
+        const uncategorizedInBatch = snapshot.docs
+          .map(doc => ({
+            ...doc.data(),
+            itunesId: doc.id
+          }))
+          .filter(p => !p.ai_badassery_score);
+
+        podcasts.push(...uncategorizedInBatch);
+        totalFetched += snapshot.docs.length;
+        lastDoc = snapshot.docs[snapshot.docs.length - 1];
+
+        log(`Fetched ${totalFetched} total, found ${podcasts.length} uncategorized so far...`);
+
+        // Stop if we have enough
+        if (podcasts.length >= LIMIT) {
+          podcasts = podcasts.slice(0, LIMIT);
+          break;
+        }
       }
     }
 
@@ -749,46 +791,69 @@ async function main() {
 
     log(`✅ Found ${podcasts.length} podcasts to process\n`, 'SUCCESS');
 
+    // Build recentEpisodeTitles from flat rss_ep{n}_title fields if not already present.
+    // The Python enricher stores episode titles as rss_ep1_title…rss_ep10_title, but
+    // parallel_scoring_v2 reads recentEpisodeTitles (an array). Without this, Gemini
+    // never sees episode titles for Firestore-sourced podcasts → wrong guest_friendly.
+    podcasts = podcasts.map(p => {
+      if (p.recentEpisodeTitles && p.recentEpisodeTitles.length > 0) return p;
+      const titles = [];
+      for (let i = 1; i <= 10; i++) {
+        const t = p[`rss_ep${i}_title`];
+        if (t && t.trim()) titles.push(t.trim());
+      }
+      return titles.length > 0 ? { ...p, recentEpisodeTitles: titles } : p;
+    });
+
     if (podcasts.length === 0) {
       log('No podcasts to process!', 'INFO');
       clearCheckpoint();
       process.exit(0);
     }
 
+    const categorizedPodcasts = [];  // full buffer for Phase 2+3
+
+    if (!SCORES_ONLY) {
     // =========================================================================
-    // PHASE 1: PARALLEL GEMINI CATEGORIZATION
+    // PHASE 1 + 4a: STREAMING — Gemini categorization runs concurrently with
+    // immediate Firestore writes so Phase 4 no longer waits for all of Phase 1.
+    //
+    // Phase 4b (percentile + badassery score updates) runs after Phase 2+3,
+    // because those require the full batch for global ranking.
     // =========================================================================
     console.log('='.repeat(80));
-    console.log('   🤖 PHASE 1: Parallel Gemini Categorization');
+    console.log('   🤖 PHASE 1+4a: Streaming Gemini → Firestore (concurrent)');
+    console.log(`   ⚡ Rate limit: ${GEMINI_RATE_LIMIT} req/sec × ${keyPool.keyCount} key(s)`);
     console.log('='.repeat(80));
     console.log('');
 
-    log(`Processing ${podcasts.length} podcasts with ${CONFIG.geminiParallel} parallel requests...`);
+    log(`Processing ${podcasts.length} podcasts with ${GEMINI_WORKERS} Gemini workers + ${CONFIG.firestoreParallel} Firestore writers...`);
 
-    const categorizedPodcasts = [];
+    const writeQueue = [];           // ready for immediate Firestore write
+    let phase1Complete = false;
+    let geminiProcessed = 0;
+    let consecutiveErrors = 0;
+    let firestoreWritten = 0;
+    const geminiQueue = [...podcasts];
     let phaseStartTime = Date.now();
 
-    const categorizeResults = await processInParallel(
-      podcasts,
-      async (podcast) => {
-        const aiResult = await categorizeSinglePodcast(podcast);
+    // ── Gemini workers (Phase 1) ──────────────────────────────────────────────
+    const geminiPromise = Promise.all(
+      Array(GEMINI_WORKERS).fill(null).map(async () => {
+        while (true) {
+          const podcast = geminiQueue.shift();
+          if (!podcast) break;
 
-        if (aiResult.success) {
-          const aiCat = aiResult.data;
+          const aiResult = await categorizeSinglePodcast(podcast);
 
-          // Calculate scores
-          const engagementLevel = calculateEngagementLevel(podcast);
-          const audienceSize = calculateAudienceSize(podcast);
-          const contentQuality = calculateContentQuality(podcast);
-          const monetizationPotential = calculateMonetizationPotential(
-            podcast,
-            engagementLevel,
-            audienceSize
-          );
+          if (aiResult.success) {
+            const aiCat = aiResult.data;
+            const engagementLevel = calculateEngagementLevel(podcast);
+            const audienceSize = calculateAudienceSize(podcast);
+            const contentQuality = calculateContentQuality(podcast);
+            const monetizationPotential = calculateMonetizationPotential(podcast, engagementLevel, audienceSize);
 
-          return {
-            success: true,
-            data: {
+            const scored = {
               itunesId: podcast.itunesId,
               title: podcast.title,
               ai_primary_category: aiCat.niche || '',
@@ -804,50 +869,152 @@ async function main() {
               ai_content_quality: contentQuality,
               ai_monetization_potential: monetizationPotential,
               _original: podcast
+            };
+
+            categorizedPodcasts.push(scored);
+            writeQueue.push(scored);
+            consecutiveErrors = 0;
+          } else {
+            consecutiveErrors++;
+            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+              log(`Circuit breaker triggered: ${consecutiveErrors} consecutive errors`, 'ERROR');
+              throw new Error('Too many consecutive errors - stopping');
             }
-          };
-        }
-
-        return { success: false, error: aiResult.error, itunesId: podcast.itunesId };
-      },
-      CONFIG.geminiParallel,
-      (completed, total) => {
-        printProgressBar(completed, total, phaseStartTime);
-
-        // Memory check
-        if (completed % MEMORY_CHECK_INTERVAL === 0) {
-          const mem = getMemoryUsage();
-          if (mem.heapUsed > 1500) { // Warning at 1.5GB
-            log(`\n⚠️  High memory usage: ${mem.heapUsed}MB`, 'WARN');
           }
-        }
 
-        // Checkpoint
-        if (completed % CHECKPOINT_INTERVAL === 0) {
-          const lastProcessed = categorizeResults[categorizeResults.length - 1];
-          if (lastProcessed?.data?.itunesId) {
+          geminiProcessed++;
+          printProgressBar(geminiProcessed, podcasts.length, phaseStartTime);
+
+          if (geminiProcessed % MEMORY_CHECK_INTERVAL === 0) {
+            const mem = getMemoryUsage();
+            if (mem.heapUsed > 1500) {
+              log(`\n⚠️  High memory usage: ${mem.heapUsed}MB`, 'WARN');
+            }
+          }
+
+          if (geminiProcessed % CHECKPOINT_INTERVAL === 0) {
             saveCheckpoint({
-              lastProcessedId: lastProcessed.data.itunesId,
-              processed: completed,
+              lastProcessedId: podcast.itunesId,
+              processed: geminiProcessed,
               timestamp: Date.now()
             });
           }
         }
-      }
+      })
+    ).then(() => { phase1Complete = true; });
+
+    // ── Firestore writers (Phase 4a) — drain writeQueue while Phase 1 runs ────
+    // Writes categorization + quality fields immediately.
+    // Percentile + badassery fields are written later in Phase 4b.
+    const firestorePromise = Promise.all(
+      Array(CONFIG.firestoreParallel).fill(null).map(async () => {
+        while (!phase1Complete || writeQueue.length > 0) {
+          if (writeQueue.length === 0) {
+            await sleep(10);
+            continue;
+          }
+          const podcast = writeQueue.shift();
+
+          if (!DRY_RUN) {
+            try {
+              await db.collection('podcasts').doc(podcast.itunesId).update({
+                ai_primary_category: podcast.ai_primary_category,
+                ai_secondary_categories: podcast.ai_secondary_categories,
+                ai_topics: podcast.ai_topics,
+                ai_target_audience: podcast.ai_target_audience,
+                ai_podcast_style: podcast.ai_podcast_style,
+                ai_business_relevance: podcast.ai_business_relevance,
+                ai_guest_friendly: podcast.ai_guest_friendly,
+                ai_summary: podcast.ai_summary,
+                ai_engagement_level: podcast.ai_engagement_level,
+                ai_audience_size: podcast.ai_audience_size,
+                ai_content_quality: podcast.ai_content_quality,
+                ai_monetization_potential: podcast.ai_monetization_potential,
+                aiCategorizationStatus: 'completed',
+                aiCategorizedAt: admin.firestore.Timestamp.now(),
+                updatedAt: admin.firestore.Timestamp.now()
+              });
+            } catch (err) {
+              log(`\nFirestore write failed for ${podcast.itunesId}: ${err.message}`, 'WARN');
+            }
+          }
+          firestoreWritten++;
+        }
+      })
     );
+
+    // Run Phase 1 and Phase 4a concurrently
+    await Promise.all([geminiPromise, firestorePromise]);
 
     console.log(''); // New line after progress bar
 
-    // Filter successful results
-    const successfulCategorizations = categorizeResults.filter(r => r.success);
-    categorizedPodcasts.push(...successfulCategorizations.map(r => r.data));
-
-    log(`Phase 1 complete: ${successfulCategorizations.length}/${podcasts.length} successful`, 'SUCCESS');
+    log(`Phase 1+4a complete: ${categorizedPodcasts.length}/${podcasts.length} categorized, ${firestoreWritten} written to Firestore`, 'SUCCESS');
 
     if (categorizedPodcasts.length === 0) {
       log('No podcasts were successfully categorized', 'ERROR');
       process.exit(1);
     }
+
+    } else {
+      // =======================================================================
+      // SCORES-ONLY MODE: Load AI fields from Firestore, skip Gemini entirely.
+      // Requires docs to already have aiCategorizationStatus: 'completed'.
+      // Use with --input-file to target specific podcasts, or without to scan
+      // all Firestore docs that have been categorized but lack ai_badassery_score.
+      // =======================================================================
+      console.log('='.repeat(80));
+      console.log('   ⚡ SCORES-ONLY: Loading pre-categorized data from Firestore');
+      console.log('='.repeat(80));
+      console.log('');
+
+      const itunesIds = podcasts.map(p => p.itunesId);
+      const GET_BATCH = 500;
+      log(`Fetching ${itunesIds.length} docs from Firestore in batches of ${GET_BATCH}...`);
+
+      for (let i = 0; i < itunesIds.length; i += GET_BATCH) {
+        const slice = itunesIds.slice(i, i + GET_BATCH);
+        const refs = slice.map(id => db.collection('podcasts').doc(id));
+        const snaps = await db.getAll(...refs);
+
+        for (const snap of snaps) {
+          if (!snap.exists) continue;
+          const data = snap.data();
+          if (data.aiCategorizationStatus !== 'completed') continue;
+
+          // Merge INPUT_FILE row (SQLite fields) + Firestore doc (AI fields + enriched fields)
+          const origRow = podcasts.find(p => p.itunesId === snap.id) || {};
+          const merged = { ...origRow, ...data, itunesId: snap.id };
+
+          categorizedPodcasts.push({
+            itunesId: snap.id,
+            title: data.title || '',
+            ai_primary_category: data.ai_primary_category || '',
+            ai_secondary_categories: data.ai_secondary_categories || [],
+            ai_topics: data.ai_topics || [],
+            ai_target_audience: data.ai_target_audience || '',
+            ai_podcast_style: data.ai_podcast_style || '',
+            ai_business_relevance: data.ai_business_relevance || 5,
+            ai_guest_friendly: data.ai_guest_friendly || false,
+            ai_summary: data.ai_summary || '',
+            ai_engagement_level: data.ai_engagement_level || calculateEngagementLevel(merged),
+            ai_audience_size: data.ai_audience_size || calculateAudienceSize(merged),
+            ai_content_quality: data.ai_content_quality || calculateContentQuality(merged),
+            ai_monetization_potential: data.ai_monetization_potential || 5,
+            _original: merged
+          });
+        }
+
+        process.stdout.write(`\r  Fetched ${Math.min(i + GET_BATCH, itunesIds.length)}/${itunesIds.length} docs...`);
+      }
+      process.stdout.write('\n');
+
+      log(`✅ Loaded ${categorizedPodcasts.length} already-categorized podcasts (Gemini skipped)`, 'SUCCESS');
+
+      if (categorizedPodcasts.length === 0) {
+        log('No docs with aiCategorizationStatus=completed found — nothing to do', 'ERROR');
+        process.exit(1);
+      }
+    } // end if (!SCORES_ONLY)
 
     // =========================================================================
     // PHASE 2: CALCULATE PERCENTILES
@@ -989,13 +1156,15 @@ async function main() {
     log(`✅ Calculated Badassery Scores for ${categorizedPodcasts.length} podcasts`, 'SUCCESS');
 
     // =========================================================================
-    // PHASE 4: PARALLEL FIRESTORE UPDATES
+    // PHASE 4b: PERCENTILE + BADASSERY SCORE UPDATES
+    // Categorization fields already written in Phase 4a.
+    // This pass writes only the fields that required the full batch.
     // =========================================================================
     console.log('\n' + '='.repeat(80));
     if (DRY_RUN) {
-      console.log('   💾 PHASE 4: Dry-Run (NO Firestore writes)');
+      console.log('   💾 PHASE 4b: Dry-Run (NO Firestore writes)');
     } else {
-      console.log('   💾 PHASE 4: Parallel Firestore Updates');
+      console.log('   💾 PHASE 4b: Percentile + Badassery Score Updates');
     }
     console.log('='.repeat(80));
     console.log('');
@@ -1006,24 +1175,12 @@ async function main() {
       categorizedPodcasts,
       async (podcast) => {
         if (DRY_RUN) {
-          await sleep(10); // Simulate write time
+          await sleep(5);
           return { success: true, itunesId: podcast.itunesId };
         }
 
         try {
-          const updateData = {
-            ai_primary_category: podcast.ai_primary_category,
-            ai_secondary_categories: podcast.ai_secondary_categories,
-            ai_topics: podcast.ai_topics,
-            ai_target_audience: podcast.ai_target_audience,
-            ai_podcast_style: podcast.ai_podcast_style,
-            ai_business_relevance: podcast.ai_business_relevance,
-            ai_guest_friendly: podcast.ai_guest_friendly,
-            ai_summary: podcast.ai_summary,
-            ai_engagement_level: podcast.ai_engagement_level,
-            ai_audience_size: podcast.ai_audience_size,
-            ai_content_quality: podcast.ai_content_quality,
-            ai_monetization_potential: podcast.ai_monetization_potential,
+          await db.collection('podcasts').doc(podcast.itunesId).update({
             ai_category_percentile: podcast.ai_category_percentile,
             ai_category_rank: podcast.ai_category_rank,
             ai_category_total: podcast.ai_category_total,
@@ -1032,20 +1189,14 @@ async function main() {
             ai_global_rank: podcast.ai_global_rank,
             ai_global_total: podcast.ai_global_total,
             ai_badassery_score: podcast.ai_badassery_score,
-            aiCategorizationStatus: 'completed',
-            aiCategorizedAt: admin.firestore.Timestamp.now(),
             updatedAt: admin.firestore.Timestamp.now()
-          };
-
-          const docRef = db.collection('podcasts').doc(podcast.itunesId);
-          await docRef.update(updateData);
-
+          });
           return { success: true, itunesId: podcast.itunesId };
         } catch (error) {
           return { success: false, error: error.message, itunesId: podcast.itunesId };
         }
       },
-      DRY_RUN ? 999999 : CONFIG.firestoreParallel, // No limit in dry-run
+      DRY_RUN ? 999999 : CONFIG.firestoreParallel,
       (completed, total) => {
         printProgressBar(completed, total, phaseStartTime);
       }
@@ -1059,7 +1210,7 @@ async function main() {
     if (DRY_RUN) {
       log(`Dry-run complete: Would have updated ${successfulUpdates} podcasts`, 'SUCCESS');
     } else {
-      log(`Updates complete: ${successfulUpdates} success, ${failedUpdates} failed`, 'SUCCESS');
+      log(`Phase 4b complete: ${successfulUpdates} success, ${failedUpdates} failed`, 'SUCCESS');
     }
 
     // =========================================================================

@@ -2,7 +2,7 @@
 
 export interface AIConfig {
   geminiApiKey: string;
-  geminiModel: 'gemini-2.0-flash' | 'gemini-2.0-flash-exp' | 'gemini-1.5-pro' | 'gemini-1.5-flash';
+  geminiModel: 'gemini-2.0-flash-lite' | 'gemini-1.5-pro' | 'gemini-1.5-flash';
   prompts: {
     bioEnhancement: string;
     pitchEmail: string;
@@ -13,7 +13,7 @@ export interface AIConfig {
 
 const DEFAULT_CONFIG: AIConfig = {
   geminiApiKey: 'AIzaSyBDRKIQEEDiEkX0GkOYSSZkuesG-QIsyr4',
-  geminiModel: 'gemini-2.0-flash',
+  geminiModel: 'gemini-2.0-flash-lite',
   prompts: {
     bioEnhancement: `You are an expert bio writer who specializes in creating compelling, storytelling-driven professional bios for thought leaders, entrepreneurs, and changemakers.
 

@@ -37,7 +37,6 @@ interface MatchingFilters {
   minScore: number;
   maxScore: number;
   categories: string[];
-  guestFriendlyOnly: boolean;
   hasEmailOnly: boolean;
   minReviews: number;
   matchCount: number;
@@ -70,7 +69,6 @@ export const AIMatching: React.FC = () => {
     minScore: 50,
     maxScore: 100,
     categories: [],
-    guestFriendlyOnly: true,
     hasEmailOnly: true,
     minReviews: 10,
     matchCount: 10
@@ -309,7 +307,7 @@ export const AIMatching: React.FC = () => {
               >
                 <Settings size={20} />
                 Filters
-                {(filters.categories.length > 0 || !filters.guestFriendlyOnly || filters.minScore > 50) && (
+                {(filters.categories.length > 0 || filters.minScore > 50) && (
                   <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
                 )}
               </button>
@@ -562,16 +560,6 @@ export const AIMatching: React.FC = () => {
               {/* Toggle Filters */}
               <div className="space-y-3">
                 <label className="flex items-center justify-between p-3 bg-slate-50 rounded-lg cursor-pointer hover:bg-slate-100">
-                  <span className="font-medium text-slate-700">Guest-Friendly Only</span>
-                  <input
-                    type="checkbox"
-                    checked={filters.guestFriendlyOnly}
-                    onChange={(e) => setFilters({ ...filters, guestFriendlyOnly: e.target.checked })}
-                    className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500"
-                  />
-                </label>
-
-                <label className="flex items-center justify-between p-3 bg-slate-50 rounded-lg cursor-pointer hover:bg-slate-100">
                   <span className="font-medium text-slate-700">Must Have Email</span>
                   <input
                     type="checkbox"
@@ -625,7 +613,6 @@ export const AIMatching: React.FC = () => {
                   minScore: 50,
                   maxScore: 100,
                   categories: [],
-                  guestFriendlyOnly: true,
                   hasEmailOnly: true,
                   minReviews: 10,
                   matchCount: 10

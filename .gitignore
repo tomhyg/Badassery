@@ -32,6 +32,11 @@ webapp/badassery/functions/lib/
 # =====================================================
 # DATA FILES — Too large for GitHub (use Google Drive)
 # =====================================================
+# Static exports — regenerated on deploy
+webapp/badassery/public/podcasts-lite.json
+webapp/badassery/public/apple_charts.json
+webapp/badassery/public/spotify_charts.json
+
 # PodcastIndex database (4.6 GB)
 podcastindex_feeds.db
 podcastindex_feeds.db/
@@ -50,6 +55,8 @@ yt_data.json
 progress.json
 checkpoint_*.json
 .checkpoint.json
+.weekly_checkpoint.json
+checkpoints/
 
 # Test output
 test_*_results*.json

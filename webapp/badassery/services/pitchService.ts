@@ -219,7 +219,7 @@ Rules:
 Return ONLY the subject line, nothing else:`;
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${aiConfig.api_keys.gemini}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${aiConfig.api_keys.gemini}`,
       {
         method: 'POST',
         headers: {

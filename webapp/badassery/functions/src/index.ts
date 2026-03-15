@@ -1,6 +1,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
+import * as crypto from 'crypto';
 import { defineString } from 'firebase-functions/params';
 
 // Initialize Firebase Admin
@@ -108,6 +109,61 @@ export const sendEmail = functions.https.onCall(async (data: SendEmailData, cont
       error.message || 'Failed to send email'
     );
   }
+});
+
+// PodcastIndex credentials
+const piApiKey = defineString('PODCASTINDEX_API_KEY', {
+  description: 'PodcastIndex API key',
+  default: ''
+});
+
+const piApiSecret = defineString('PODCASTINDEX_API_SECRET', {
+  description: 'PodcastIndex API secret',
+  default: ''
+});
+
+/**
+ * Cloud Function: PodcastIndex API Proxy
+ *
+ * Proxies /api/podcastindex/** requests to api.podcastindex.org,
+ * injecting the SHA-1 auth headers server-side so credentials are never
+ * exposed to the browser.
+ *
+ * Firebase Hosting rewrites /api/podcastindex/** to this function.
+ * e.g. /api/podcastindex/episodes/byfeedid?id=123
+ *   → https://api.podcastindex.org/api/1.0/episodes/byfeedid?id=123
+ */
+export const podcastIndexProxy = functions.https.onRequest(async (req, res) => {
+  const apiKey    = piApiKey.value();
+  const apiSecret = piApiSecret.value();
+
+  if (!apiKey || !apiSecret) {
+    res.status(500).json({ error: 'PodcastIndex credentials not configured' });
+    return;
+  }
+
+  // Strip the /api/podcastindex prefix; req.url includes path + query string
+  const suffix    = req.url.replace(/^\/api\/podcastindex/, '');
+  const targetUrl = `https://api.podcastindex.org/api/1.0${suffix}`;
+
+  // Build SHA-1 auth headers
+  const epochTime = Math.floor(Date.now() / 1000);
+  const hash      = crypto
+    .createHash('sha1')
+    .update(apiKey + apiSecret + String(epochTime))
+    .digest('hex');
+
+  const piRes = await fetch(targetUrl, {
+    headers: {
+      'X-Auth-Date'  : String(epochTime),
+      'X-Auth-Key'   : apiKey,
+      'Authorization': hash,
+      'User-Agent'   : 'BadasseryPR/1.0',
+    },
+  });
+
+  const data = await piRes.json();
+  res.status(piRes.status).json(data);
 });
 
 /**

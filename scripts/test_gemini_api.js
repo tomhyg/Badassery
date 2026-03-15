@@ -14,11 +14,11 @@ console.log('');
 async function testAPI() {
   try {
     console.log('📋 API Key:', apiKey.substring(0, 10) + '...');
-    console.log('🔧 Model: gemini-2.0-flash-exp');
+    console.log('🔧 Model: gemini-2.0-flash-lite');
     console.log('');
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
 
     console.log('🧪 Test 1: Simple request...');
     const startTime = Date.now();

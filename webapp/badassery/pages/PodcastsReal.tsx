@@ -3,7 +3,7 @@ import {
   Search, Filter, Star, Mic, Mail, ExternalLink,
   TrendingUp, Users, ChevronDown, Sparkles, Award, Target,
   Youtube, Twitter, Instagram, Linkedin, Globe, Play, Podcast as PodcastIcon,
-  ArrowUpDown, UserPlus, Loader
+  ArrowUpDown, UserPlus, Loader, Info
 } from 'lucide-react';
 import {
   getScoredPodcastsFiltered,
@@ -36,7 +36,6 @@ export const PodcastsReal: React.FC = () => {
   const [badasseryScoreRange, setBadasseryScoreRange] = useState<[number, number]>([0, 100]);
   const [businessRelevanceRange, setBusinessRelevanceRange] = useState<[number, number]>([0, 10]);
   const [reviewsRange, setReviewsRange] = useState<[number, number]>([0, 10000]);
-  const [guestFriendlyOnly, setGuestFriendlyOnly] = useState(false);
   const [selectedPercentile, setSelectedPercentile] = useState<string>('');
   const [audienceSize, setAudienceSize] = useState<'all' | 'small' | 'medium' | 'large'>('all');
   const [sortBy, setSortBy] = useState<'score' | 'rating' | 'reviews' | 'date'>('score');
@@ -94,7 +93,7 @@ export const PodcastsReal: React.FC = () => {
   // Reset display count when filters change
   useEffect(() => {
     setDisplayCount(INITIAL_DISPLAY_COUNT);
-  }, [searchTerm, selectedCategories, selectedTopics, badasseryScoreRange, businessRelevanceRange, reviewsRange, guestFriendlyOnly, selectedPercentile, audienceSize, sortBy]);
+  }, [searchTerm, selectedCategories, selectedTopics, badasseryScoreRange, businessRelevanceRange, reviewsRange, selectedPercentile, audienceSize, sortBy]);
 
   const loadCategoryDistribution = async () => {
     // Not used anymore - we extract from loaded podcasts
@@ -159,7 +158,7 @@ export const PodcastsReal: React.FC = () => {
   useEffect(() => {
     // Only re-load if filters change the source data significantly
     // For now, all filtering is done client-side in filteredPodcasts
-  }, [selectedCategories, badasseryScoreRange, businessRelevanceRange, guestFriendlyOnly, selectedPercentile]);
+  }, [selectedCategories, badasseryScoreRange, businessRelevanceRange, selectedPercentile]);
 
   // Handler for category checkbox
   const toggleCategory = (category: string) => {
@@ -190,11 +189,12 @@ export const PodcastsReal: React.FC = () => {
           p.ai_topics?.some(t => t.toLowerCase().includes(searchLower))
         );
 
-        // Category filter (multi-select)
+        // Category filter — OR within categories, also matches secondary categories
         const matchesCategory = selectedCategories.length === 0 ||
-          (p.ai_primary_category && selectedCategories.includes(p.ai_primary_category));
+          selectedCategories.includes(p.ai_primary_category || '') ||
+          (p.ai_secondary_categories && p.ai_secondary_categories.some((c: string) => selectedCategories.includes(c)));
 
-        // Topics filter (multi-select) - podcast must have at least one of the selected topics
+        // Topics filter — OR within topics, AND with categories
         const matchesTopics = selectedTopics.length === 0 ||
           (p.ai_topics && p.ai_topics.some(t => selectedTopics.includes(t)));
 
@@ -211,6 +211,9 @@ export const PodcastsReal: React.FC = () => {
         const matchesReviews = (reviewsRange[0] === 0 && reviewsRange[1] === 10000) ||
           (reviewCount >= reviewsRange[0] && reviewCount <= reviewsRange[1]);
 
+        // Percentile filter
+        const matchesPercentile = !selectedPercentile || p.ai_global_percentile === selectedPercentile;
+
         // Audience size filter
         const ytSubs = p.yt_subscribers || 0;
         let matchesAudience = true;
@@ -218,7 +221,7 @@ export const PodcastsReal: React.FC = () => {
         else if (audienceSize === 'medium') matchesAudience = ytSubs >= 10000 && ytSubs < 100000;
         else if (audienceSize === 'large') matchesAudience = ytSubs >= 100000;
 
-        return matchesSearch && matchesCategory && matchesTopics && matchesBadassery && matchesRelevance && matchesReviews && matchesAudience;
+        return matchesSearch && matchesCategory && matchesTopics && matchesBadassery && matchesRelevance && matchesReviews && matchesPercentile && matchesAudience;
       })
       .sort((a, b) => {
         // Sorting logic
@@ -235,7 +238,7 @@ export const PodcastsReal: React.FC = () => {
             return 0;
         }
       });
-  }, [podcasts, searchTerm, selectedCategories, selectedTopics, badasseryScoreRange, businessRelevanceRange, reviewsRange, audienceSize, sortBy]);
+  }, [podcasts, searchTerm, selectedCategories, selectedTopics, badasseryScoreRange, businessRelevanceRange, reviewsRange, selectedPercentile, audienceSize, sortBy]);
 
   // Limit displayed podcasts for performance
   const displayedPodcasts = filteredPodcasts.slice(0, displayCount);
@@ -315,10 +318,19 @@ export const PodcastsReal: React.FC = () => {
 
             {/* Category Filter - Checkboxes */}
             <div>
-              <label className="text-sm font-semibold text-slate-900 mb-3 block flex items-center gap-2">
-                <Filter size={16} />
-                Badassery Categories
-              </label>
+              <div className="flex items-center gap-2 mb-1">
+                <Filter size={16} className="text-slate-700" />
+                <span className="text-sm font-semibold text-slate-900">Badassery Categories</span>
+                <div className="relative group">
+                  <Info size={13} className="text-slate-400 cursor-help" />
+                  <div className="absolute left-0 top-5 w-64 bg-slate-800 text-white text-xs rounded-lg p-2.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg leading-relaxed">
+                    31 niches assigned by AI (Gemini) based on the podcast's title, description, and Apple Podcasts genres. Each podcast has one primary category and up to 2 secondary ones — this filter matches both.
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 mb-3">
+                OR within categories · AND with Topics
+              </p>
               <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
                 {BADASSERY_NICHES.map(niche => (
                   <label
@@ -406,6 +418,7 @@ export const PodcastsReal: React.FC = () => {
               value={businessRelevanceRange}
               onChange={setBusinessRelevanceRange}
               step={1}
+              tooltip="Score 1–10 assigned by AI reflecting how relevant the podcast's audience is to business professionals. 10 = core B2B audience (CEOs, founders, investors). 1 = general lifestyle or personal interest."
             />
 
             {/* Apple Reviews Filter */}
@@ -415,8 +428,9 @@ export const PodcastsReal: React.FC = () => {
               max={10000}
               value={reviewsRange}
               onChange={setReviewsRange}
-              step={100}
+              step={10}
               formatValue={(v) => v >= 1000 ? `${(v / 1000).toFixed(1)}K` : v.toString()}
+              tooltip="Number of Apple Podcasts ratings. A proxy for audience engagement — our minimum threshold is 10 reviews."
             />
 
             {/* Percentile Filter */}
@@ -439,25 +453,6 @@ export const PodcastsReal: React.FC = () => {
               </select>
             </div>
 
-            {/* Guest Friendly Toggle */}
-            <div>
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={guestFriendlyOnly}
-                  onChange={(e) => setGuestFriendlyOnly(e.target.checked)}
-                  className="w-5 h-5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-                />
-                <div className="flex-1">
-                  <div className="text-sm font-semibold text-slate-900 group-hover:text-indigo-600">
-                    Guest-Friendly Only
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Podcasts that accept guests
-                  </div>
-                </div>
-              </label>
-            </div>
 
             {/* Audience Size Filter - Radio Buttons */}
             <div>
@@ -529,7 +524,7 @@ export const PodcastsReal: React.FC = () => {
                 setBadasseryScoreRange([0, 100]);
                 setBusinessRelevanceRange([0, 10]);
                 setReviewsRange([0, 10000]);
-                setGuestFriendlyOnly(false);
+
                 setSelectedPercentile('');
                 setAudienceSize('all');
                 setSearchTerm('');
@@ -559,7 +554,7 @@ export const PodcastsReal: React.FC = () => {
                     setBadasseryScoreRange([0, 100]);
                     setBusinessRelevanceRange([0, 10]);
                     setReviewsRange([0, 10000]);
-                    setGuestFriendlyOnly(false);
+    
                     setSelectedPercentile('');
                     setAudienceSize('all');
                   }}
@@ -600,7 +595,7 @@ export const PodcastsReal: React.FC = () => {
                               {podcast.title}
                             </h3>
                             <p className="text-sm text-slate-600 line-clamp-2">
-                              {podcast.ai_summary || podcast.description?.substring(0, 150) + '...'}
+                              {podcast.ai_summary || (podcast.description ? podcast.description.replace(/<[^>]*>/g, '').substring(0, 150) + '...' : '')}
                             </p>
                           </div>
 
@@ -632,12 +627,6 @@ export const PodcastsReal: React.FC = () => {
                             </span>
                           )}
 
-                          {/* Guest Friendly Badge */}
-                          {podcast.ai_guest_friendly && (
-                            <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-md">
-                              Guest-Friendly
-                            </span>
-                          )}
 
                           {/* Business Relevance */}
                           {podcast.ai_business_relevance && podcast.ai_business_relevance >= 7 && (
@@ -689,7 +678,7 @@ export const PodcastsReal: React.FC = () => {
                           )}
 
                           {podcast.ai_engagement_level && (
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1" title="Estimated engagement: weighted score based on YouTube subscribers, Apple review count, and episode frequency.">
                               <TrendingUp size={14} className="text-green-500" />
                               <span>Engagement: {podcast.ai_engagement_level.toFixed(1)}/10</span>
                             </div>
@@ -737,18 +726,6 @@ export const PodcastsReal: React.FC = () => {
                             </a>
                           )}
 
-                          {podcast.rss_url && (
-                            <a
-                              href={podcast.rss_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-slate-400 hover:text-orange-600 transition-colors"
-                              title="RSS Feed"
-                            >
-                              <Play size={18} />
-                            </a>
-                          )}
 
                           {podcast.twitter && (
                             <a

@@ -19,7 +19,7 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyBDRKIQEEDiEkX0GkOYSSZkuesG-QIsyr4');
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
 
 console.log('='.repeat(80));
 console.log('   ⚡ TEMPORARY SCRIPT - No Index Required');

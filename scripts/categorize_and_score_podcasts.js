@@ -14,7 +14,7 @@ const db = admin.firestore();
 
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyBDRKIQEEDiEkX0GkOYSSZkuesG-QIsyr4');
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
 
 // Configuration
 const BATCH_SIZE = 10; // Process 10 podcasts at a time for Gemini

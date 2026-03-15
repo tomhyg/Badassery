@@ -202,7 +202,7 @@ export const FollowUpReviewModal: React.FC<FollowUpReviewModalProps> = ({
         body: generated.body,
         sent_at: Timestamp.now(),
         generated_by_ai: true,
-        ai_model_used: 'gemini-2.0-flash',
+        ai_model_used: 'gemini-2.0-flash-lite',
         api_message_id: result.messageId
       });
 

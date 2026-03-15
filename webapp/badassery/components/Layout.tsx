@@ -35,7 +35,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNav
       icon: Mic,
       submenu: [
         { id: 'podcasts', label: 'Search' },
-        { id: 'podcasts-new', label: 'Add New' }
+        { id: 'podcasts-new', label: 'Add New' },
+        { id: 'apple-charts', label: 'Apple Charts' },
+        { id: 'spotify-charts', label: 'Spotify Charts' }
       ]
     },
     {
