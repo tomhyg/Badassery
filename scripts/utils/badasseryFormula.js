@@ -62,22 +62,40 @@ function componentScore(signals) {
  * @param {object[]} feeds
  * @returns {{ maxReviews, maxViews, maxFollowers, maxRatio }}
  */
+// Fixed anchor norms — calibrated against the broader podcast population.
+// These replace batch-relative maximums so scores are comparable across runs.
+// Update periodically by running: node scripts/utils/calibrateNorms.js
+const FIXED_NORMS = {
+  maxReviews   : 50000,   // ~top 0.1% of podcasts (Joe Rogan ~200K, most top shows 20-80K)
+  maxViews     : 500000,  // avg views/ep for very large YouTube podcasts
+  maxFollowers : 2000000, // combined social followers ceiling
+  maxRatio     : 50,      // reviews per episode ceiling
+};
+
 function prepareBatchNorms(feeds) {
-  let maxReviews = 0, maxViews = 0, maxFollowers = 0, maxRatio = 0;
+  // Use fixed anchors — makes scores comparable across different batches.
+  // Batch-observed maximums are capped at fixed anchors so a small test batch
+  // of 10 podcasts doesn't inflate scores relative to production.
+  let batchReviews = 0, batchViews = 0, batchFollowers = 0, batchRatio = 0;
 
   for (const f of feeds) {
-    const reviews  = (f.apple_rating_count || 0) + (f.spotify_review_count || 0);
-    const views    = f.yt_avg_views_per_video || 0;
-    const followers = f.instagram_followers || 0;
-    const ratio    = reviews / Math.max(f.episodeCount || 1, 1);
+    const reviews   = (f.apple_rating_count || 0) + (f.spotify_review_count || 0);
+    const views     = f.yt_avg_views_per_video || 0;
+    const followers = (f.instagram_followers || 0) + (f.twitter_followers || 0);
+    const ratio     = reviews / Math.max(f.episodeCount || 1, 1);
 
-    if (reviews   > maxReviews)   maxReviews   = reviews;
-    if (views     > maxViews)     maxViews     = views;
-    if (followers > maxFollowers) maxFollowers = followers;
-    if (ratio     > maxRatio)     maxRatio     = ratio;
+    if (reviews   > batchReviews)   batchReviews   = reviews;
+    if (views     > batchViews)     batchViews     = views;
+    if (followers > batchFollowers) batchFollowers = followers;
+    if (ratio     > batchRatio)     batchRatio     = ratio;
   }
 
-  return { maxReviews, maxViews, maxFollowers, maxRatio };
+  return {
+    maxReviews   : Math.max(batchReviews,   FIXED_NORMS.maxReviews),
+    maxViews     : Math.max(batchViews,     FIXED_NORMS.maxViews),
+    maxFollowers : Math.max(batchFollowers, FIXED_NORMS.maxFollowers),
+    maxRatio     : Math.max(batchRatio,     FIXED_NORMS.maxRatio),
+  };
 }
 
 // ── Per-signal calculators ────────────────────────────────────────────────────
@@ -136,7 +154,12 @@ function sig_ytViews(f, n) {
 }
 
 function sig_socialFollowers(f, n) {
-  return logNorm(f.instagram_followers, n.maxFollowers);
+  // Sum all available social follower counts (Instagram + Twitter + TikTok)
+  const ig  = f.instagram_followers  || 0;
+  const tw  = f.twitter_followers    || 0;
+  const ttk = f.tiktok_followers     || 0;
+  const total = ig + tw + ttk;
+  return total > 0 ? logNorm(total, n.maxFollowers) : null;
 }
 
 function sig_chartRank(f) {

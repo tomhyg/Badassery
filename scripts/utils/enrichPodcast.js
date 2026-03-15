@@ -23,10 +23,11 @@
  *   instagram_followers
  */
 
-const { scrapeAppleRating }       = require('./appleRatingScraper');
-const { scrapeSpotifyRating }     = require('./spotifyRating');
+const { scrapeAppleRating }        = require('./appleRatingScraper');
+const { scrapeSpotifyRating }      = require('./spotifyRating');
 const { scrapeInstagramFollowers } = require('./instagramScraper');
-const { getBrowser }              = require('./browserManager');
+const { scrapeTwitterFollowers }   = require('./twitterScraper');
+const { getBrowser }               = require('./browserManager');
 
 // ── Puppeteer concurrency limiter ─────────────────────────────────────────────
 // Apple + Spotify + Instagram all share one browser. Cap simultaneous Puppeteer
@@ -104,7 +105,7 @@ const SOCIAL_MATCHERS = [
   },
   {
     field: 'website_facebook',
-    re: /https?:\/\/(?:www\.)?facebook\.com\/(?!(?:sharer|share\.php|login|signup|dialog|plugins|photo|watch|events|groups|pages\/create|l\.php|ajax)(?:\/|$|\?))[A-Za-z0-9_.]+\/?/gi,
+    re: /https?:\/\/(?:www\.)?facebook\.com\/(?!(?:sharer|share\.php|login|signup|dialog|plugins|photo|watch|events|groups|pages\/create|l\.php|ajax)(?:\/|$|\?))[A-Za-z0-9_.\-]{3,100}\/?/gi,
   },
   {
     field: 'website_tiktok',
@@ -624,6 +625,16 @@ async function enrichPodcast(feed) {
     await acquirePuppeteerSlot();
     try { Object.assign(feed, await step4e_instagram(feed)); } catch {} finally { releasePuppeteerSlot(); }
     await sleep(1000);
+  }
+
+  // 4f — Twitter followers (only if URL found by 4a; best-effort, low success rate)
+  if (feed.website_twitter) {
+    await acquirePuppeteerSlot();
+    try {
+      const browser = await getBrowser();
+      const tw = await scrapeTwitterFollowers(feed.website_twitter, browser);
+      if (tw) Object.assign(feed, tw);
+    } catch {} finally { releasePuppeteerSlot(); }
   }
 
   return feed;

@@ -31,6 +31,20 @@ const path     = require('path');
 const fs       = require('fs');
 const Database = require('better-sqlite3');
 
+// Firebase admin (only initialised when --confirm is passed)
+let admin = null;
+let db    = null;
+function initFirebase() {
+  if (db) return db;
+  admin = require('firebase-admin');
+  const serviceAccount = require('../serviceAccountKey.json');
+  if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+  }
+  db = admin.firestore();
+  return db;
+}
+
 const { DB_PATH }            = require('./utils/sqliteDb');
 const { PodcastIndexClient } = require('./utils/podcastIndexClient');
 const { initKeyPool, scorePodcastFull }                       = require('./utils/geminiScorer');
@@ -789,6 +803,114 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+// ── Phase 7 — Firestore writes ────────────────────────────────────────────────
+
+async function phase7_writeToFirestore(feeds) {
+  log(`Phase 7 — Writing ${feeds.length} podcasts to Firestore`, 'PHASE');
+  const firestore  = initFirebase();
+  const WRITE_SIZE = 400; // Firestore batch limit is 500 ops
+  let written = 0;
+
+  for (let i = 0; i < feeds.length; i += WRITE_SIZE) {
+    const chunk = feeds.slice(i, i + WRITE_SIZE);
+    const batch = firestore.batch();
+
+    for (const f of chunk) {
+      const ref = firestore.collection('podcasts').doc(String(f.itunesId));
+
+      // Strip internal debug/pipeline fields before writing
+      const doc = {
+        itunesId                : f.itunesId,
+        feedId                  : f.feedId ?? null,
+        title                   : f.title || '',
+        description             : f.description || '',
+        language                : f.language || '',
+        imageUrl                : f.imageUrl || '',
+        homepageUrl             : f.homepageUrl || '',
+        rssUrl                  : f.rssUrl || '',
+        author                  : f.author || '',
+        ownerName               : f.ownerName || '',
+        episodeCount            : f.episodeCount || 0,
+        newestItemPubdate       : f.newestItemPubdate ?? null,
+        oldestItemPubdate       : f.oldestItemPubdate ?? null,
+        popularityScore         : f.popularityScore ?? null,
+        // Enrichment
+        rss_owner_email         : f.rss_owner_email || '',
+        website_email           : f.website_email || '',
+        website_instagram       : f.website_instagram || '',
+        website_twitter         : f.website_twitter || '',
+        website_linkedin        : f.website_linkedin || '',
+        website_youtube         : f.website_youtube || '',
+        website_spotify         : f.website_spotify || '',
+        website_facebook        : f.website_facebook || '',
+        website_tiktok          : f.website_tiktok || '',
+        apple_rating            : f.apple_rating ?? null,
+        apple_rating_count      : f.apple_rating_count ?? null,
+        apple_chart_rank        : f.apple_chart_rank ?? null,
+        apple_chart_genre       : f.apple_chart_genre || '',
+        spotify_rating          : f.spotify_rating ?? null,
+        spotify_review_count    : f.spotify_review_count ?? null,
+        spotify_chart_rank      : f.spotify_chart_rank ?? null,
+        yt_subscribers          : f.yt_subscribers ?? null,
+        yt_total_views          : f.yt_total_views ?? null,
+        yt_avg_views_per_video  : f.yt_avg_views_per_video ?? null,
+        instagram_followers     : f.instagram_followers ?? null,
+        twitter_followers       : f.twitter_followers ?? null,
+        // Guest intelligence
+        gemini_guest_friendly         : f.gemini_guest_friendly ?? null,
+        gemini_guest_ratio            : f.gemini_guest_ratio ?? null,
+        gemini_guest_authority        : f.gemini_guest_authority || '',
+        gemini_guest_confidence       : f.gemini_guest_confidence || '',
+        gemini_guest_types            : f.gemini_guest_types || [],
+        gemini_guest_industries       : f.gemini_guest_industries || [],
+        gemini_typical_guest_profile  : f.gemini_typical_guest_profile || '',
+        gemini_recent_guests          : f.gemini_recent_guests || [],
+        // AI scoring
+        ai_primary_category           : f.ai_primary_category || '',
+        ai_secondary_categories       : f.ai_secondary_categories || [],
+        ai_topics                     : f.ai_topics || [],
+        ai_target_audience            : f.ai_target_audience || '',
+        ai_podcast_style              : f.ai_podcast_style || '',
+        ai_business_relevance         : f.ai_business_relevance ?? null,
+        ai_content_quality            : f.ai_content_quality ?? null,
+        ai_audience_size              : f.ai_audience_size || '',
+        ai_engagement_level           : f.ai_engagement_level || '',
+        ai_monetization_potential     : f.ai_monetization_potential || '',
+        ai_summary                    : f.ai_summary || '',
+        // Badassery Score
+        ai_badassery_score            : f.ai_badassery_score ?? null,
+        ai_global_percentile          : f.ai_global_percentile ?? null,
+        ai_category_percentile        : f.ai_category_percentile ?? null,
+        score_guest_compatibility     : f.score_guest_compatibility ?? null,
+        score_audience_power          : f.score_audience_power ?? null,
+        score_podcast_authority       : f.score_podcast_authority ?? null,
+        score_activity_consistency    : f.score_activity_consistency ?? null,
+        score_engagement              : f.score_engagement ?? null,
+        score_contactability          : f.score_contactability ?? null,
+        score_missing_signals         : f.score_missing_signals || [],
+        // Meta
+        has_chapters                  : f.has_chapters ?? false,
+        has_transcripts               : f.has_transcripts ?? false,
+        avg_episode_length_min        : f.avg_episode_length_min ?? null,
+        publish_consistency           : f.publish_consistency ?? null,
+        aiCategorizationStatus        : 'completed',
+        aiCategorizedAt               : admin.firestore.Timestamp.now(),
+        updatedAt                     : admin.firestore.Timestamp.now(),
+        uploadedFrom                  : 'rebuild_database',
+      };
+
+      batch.set(ref, doc, { merge: true });
+    }
+
+    await batch.commit();
+    written += chunk.length;
+    process.stdout.write(`\r  [P7] ${written}/${feeds.length} written...`);
+  }
+
+  process.stdout.write('\n');
+  log(`Phase 7 done — ${written} podcasts written to Firestore`, 'SUCCESS');
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -972,6 +1094,11 @@ async function main() {
 
   // ── Results table ──────────────────────────────────────────────────────────
   printResults(allFeeds);
+
+  // ── Phase 7 — Firestore writes ────────────────────────────────────────────
+  if (!DRY_RUN) {
+    await phase7_writeToFirestore(toScore6);
+  }
 
   // ── Markdown report ────────────────────────────────────────────────────────
   if (REPORT) {
