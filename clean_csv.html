@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Cleaner - Outreach Data (Fixed)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .upload-area {
+            border: 2px dashed #4F46E5;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: all 0.3s;
+        }
+        .upload-area:hover {
+            background: #f9fafb;
+            border-color: #6366f1;
+        }
+        .upload-area.active {
+            background: #eef2ff;
+            border-color: #6366f1;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .btn {
+            background: #4F46E5;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #4338ca;
+        }
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .stats {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        .stats h3 {
+            margin-top: 0;
+            color: #4F46E5;
+        }
+        .sample {
+            margin-top: 20px;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            border: 1px solid #e5e7eb;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background: #f3f4f6;
+            font-weight: 600;
+        }
+        .success {
+            color: #10b981;
+            font-weight: 600;
+        }
+        .info {
+            color: #6b7280;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧹 CSV Cleaner - Outreach Data (Fixed Multiline Parser)</h1>
+        <p class="info">This tool will clean your outreach CSV file by:</p>
+        <ul class="info">
+            <li>Removing [X%] prefixes from show names</li>
+            <li>Extracting iTunes IDs from Apple Podcast URLs</li>
+            <li>Parsing host contact information into separate columns</li>
+            <li><strong>Properly handling multiline fields in quotes</strong></li>
+        </ul>
+
+        <div class="upload-area" id="uploadArea">
+            <p>📂 Click or drag and drop your CSV file here</p>
+            <p class="info">outreach_final_2026_January-Grid view.csv</p>
+            <input type="file" id="fileInput" accept=".csv">
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const results = document.getElementById('results');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('active');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('active');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('active');
+            const file = e.dataTransfer.files[0];
+            if (file) processFile(file);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) processFile(file);
+        });
+
+        function extractPodcastIdFromUrl(url) {
+            if (!url) return '';
+            const match = url.match(/\/id(\d+)/);
+            return match ? match[1] : '';
+        }
+
+        function cleanShowName(showName) {
+            if (!showName) return showName;
+            return showName.replace(/^\[\d+%\]\s*/, '').trim();
+        }
+
+        function parseHostContactInfo(contactInfo) {
+            const result = {
+                host_linkedin: '',
+                host_email: '',
+                host_website: ''
+            };
+
+            if (!contactInfo) return result;
+
+            // Replace newlines and extra spaces with single space for parsing
+            const cleaned = contactInfo.replace(/\s+/g, ' ').trim();
+
+            const linkedinMatch = cleaned.match(/LinkedIn[:\s]+(https?:\/\/[^\s]+)/i);
+            if (linkedinMatch) result.host_linkedin = linkedinMatch[1].trim();
+
+            const emailMatch = cleaned.match(/mailto:([^\s]+)|Email[:\s]+([^\s]+@[^\s]+)/i);
+            if (emailMatch) result.host_email = (emailMatch[1] || emailMatch[2] || '').trim();
+
+            const websiteMatch = cleaned.match(/Website[:\s]+(https?:\/\/[^\s]+)/i);
+            if (websiteMatch) result.host_website = websiteMatch[1].trim();
+
+            return result;
+        }
+
+        function parseCSVProper(content) {
+            const rows = [];
+            let currentRow = [];
+            let currentField = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < content.length; i++) {
+                const char = content[i];
+                const nextChar = content[i + 1];
+
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        // Escaped quote
+                        currentField += '"';
+                        i++; // Skip next quote
+                    } else {
+                        // Toggle quotes
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    // End of field
+                    currentRow.push(currentField.trim());
+                    currentField = '';
+                } else if ((char === '\n' || char === '\r') && !inQuotes) {
+                    // End of row
+                    if (currentField || currentRow.length > 0) {
+                        currentRow.push(currentField.trim());
+                        if (currentRow.some(f => f !== '')) {
+                            rows.push(currentRow);
+                        }
+                        currentRow = [];
+                        currentField = '';
+                    }
+                    // Skip \r\n together
+                    if (char === '\r' && nextChar === '\n') {
+                        i++;
+                    }
+                } else {
+                    currentField += char;
+                }
+            }
+
+            // Add last field/row
+            if (currentField || currentRow.length > 0) {
+                currentRow.push(currentField.trim());
+                if (currentRow.some(f => f !== '')) {
+                    rows.push(currentRow);
+                }
+            }
+
+            return rows;
+        }
+
+        function toCSVLine(obj, headers) {
+            return headers.map(header => {
+                const value = obj[header] || '';
+                // Replace newlines within fields with spaces
+                const cleanValue = value.replace(/\r?\n/g, ' ').trim();
+                if (cleanValue.includes(',') || cleanValue.includes('"')) {
+                    return `"${cleanValue.replace(/"/g, '""')}"`;
+                }
+                return cleanValue;
+            }).join(',');
+        }
+
+        function processFile(file) {
+            results.innerHTML = '<p>⏳ Processing...</p>';
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                const cleanContent = content.replace(/^\uFEFF/, '');
+
+                const allRows = parseCSVProper(cleanContent);
+                const headers = allRows[0];
+                const dataRows = allRows.slice(1);
+
+                const rows = dataRows.map(values => {
+                    const row = {};
+                    headers.forEach((header, index) => {
+                        row[header] = values[index] || '';
+                    });
+                    return row;
+                });
+
+                // Add new columns
+                const showNameIndex = headers.indexOf('Show Name (from Show Name)');
+                const newHeaders = [...headers];
+                newHeaders.splice(showNameIndex + 1, 0, 'Show Name Clean', 'iTunes ID');
+
+                const hostInfoIndex = newHeaders.indexOf('Host Contact Info');
+                newHeaders.splice(hostInfoIndex + 1, 0, 'Host LinkedIn', 'Host Email', 'Host Website');
+
+                // Process rows
+                const processedRows = rows.map(row => {
+                    const newRow = { ...row };
+
+                    const showNameFrom = row['Show Name (from Show Name)'] || '';
+                    newRow['Show Name Clean'] = cleanShowName(showNameFrom);
+
+                    const showLink = row['Show link'] || '';
+                    newRow['iTunes ID'] = extractPodcastIdFromUrl(showLink);
+
+                    const hostContactInfo = row['Host Contact Info'] || '';
+                    const hostData = parseHostContactInfo(hostContactInfo);
+                    newRow['Host LinkedIn'] = hostData.host_linkedin;
+                    newRow['Host Email'] = hostData.host_email;
+                    newRow['Host Website'] = hostData.host_website;
+
+                    return newRow;
+                });
+
+                // Generate output CSV
+                const outputLines = [
+                    newHeaders.join(','),
+                    ...processedRows.map(row => toCSVLine(row, newHeaders))
+                ];
+                const outputContent = outputLines.join('\n');
+
+                // Display results
+                displayResults(processedRows, outputContent);
+            };
+
+            reader.readAsText(file);
+        }
+
+        function displayResults(rows, csvContent) {
+            const html = `
+                <div class="stats">
+                    <h3 class="success">✅ Success!</h3>
+                    <p><strong>Total rows processed:</strong> ${rows.length}</p>
+
+                    <button class="btn" onclick="downloadCSV()">📥 Download Cleaned CSV</button>
+
+                    <h4 style="margin-top: 20px;">📋 Sample Data (first 5 rows):</h4>
+                    <div class="sample">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Client</th>
+                                    <th>Show Name Original</th>
+                                    <th>Show Name Clean</th>
+                                    <th>iTunes ID</th>
+                                    <th>Host LinkedIn</th>
+                                    <th>Host Email</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rows.slice(0, 5).map(row => `
+                                    <tr>
+                                        <td>${row['Client'] || ''}</td>
+                                        <td>${row['Show Name (from Show Name)'] || ''}</td>
+                                        <td><strong>${row['Show Name Clean'] || ''}</strong></td>
+                                        <td><strong>${row['iTunes ID'] || ''}</strong></td>
+                                        <td>${row['Host LinkedIn'] ? '✓' : ''}</td>
+                                        <td>${row['Host Email'] || ''}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+            results.innerHTML = html;
+
+            // Store CSV content for download
+            window.cleanedCSVContent = csvContent;
+        }
+
+        function downloadCSV() {
+            const content = window.cleanedCSVContent;
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'outreach_final_2026_January_CLEANED_V2.csv');
+            link.style.visibility = 'hidden';
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>

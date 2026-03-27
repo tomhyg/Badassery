@@ -1,0 +1,165 @@
+================================================================================
+  PRÊT À LANCER - SCRIPT AI UNIFIÉ
+================================================================================
+
+FICHIERS CRÉÉS:
+  ✅ scripts/categorize_and_score_podcasts.js - Script principal
+  ✅ LANCER_AI_COMPLETE.bat - Batch file Windows
+  ✅ GUIDE_AI_UNIFIE.md - Documentation complète
+
+================================================================================
+
+ÉTAPES POUR LANCER:
+
+1. INSTALLER DÉPENDANCES (si pas déjà fait):
+
+   cd "C:\Users\admin\OneDrive\Bureau\Dossier danielle"
+   npm install
+
+2. OBTENIR CLÉ GEMINI API:
+
+   https://makersuite.google.com/app/apikey
+   → Créer une clé API
+   → Copier la clé (commence par "AIza...")
+
+3. CONFIGURER LA CLÉ:
+
+   Option A - Variable d'environnement:
+     set GEMINI_API_KEY=AIza...votre_cle_ici
+
+   Option B - Éditer le script:
+     Ouvrir scripts/categorize_and_score_podcasts.js
+     Ligne 14: remplacer 'YOUR_API_KEY_HERE' par votre clé
+
+4. LANCER:
+
+   Double-cliquer sur: LANCER_AI_COMPLETE.bat
+
+   OU en ligne de commande:
+     node scripts/categorize_and_score_podcasts.js
+
+================================================================================
+
+CE QUE LE SCRIPT FAIT:
+
+PHASE 1-2: GEMINI CATEGORIZATION + SCORING INDIVIDUEL (batch de 10)
+  → Analyse title, description, genres, épisodes
+  → Choisit 1 niche parmi les 31 Badassery
+  → Identifie 3-5 topics
+  → Détermine business_relevance (1-10)
+  → Détecte guest_friendly (true/false)
+  → Génère summary unique
+  → Calcul engagement level (Apple + YouTube + fraîcheur + social)
+  → Calcul audience size (subs + reviews + épisodes + views)
+  → Calcul content quality (Apple rating + review count)
+  → Calcul monetization potential (audience × engagement)
+
+PHASE 3: PERCENTILE PAR CATÉGORIE
+  → Groupe les podcasts par niche
+  → Calcule "power score" (YouTube + Apple + épisodes)
+  → Assigne percentile: Top 1%, 5%, 10%, 25%, 50%, ou Standard
+  → Détermine rank dans la catégorie (ex: #12 sur 150)
+
+PHASE 4: BADASSERY SCORE (0-100)
+  → 40% Engagement Level
+  → 30% Audience Size
+  → 30% Category Percentile
+  → Score composite pour priorisation outreach
+
+PHASE 5: FIRESTORE UPDATE (automatique)
+  → Update avec 16 champs AI
+  → Status = 'completed'
+  → Timestamp ajouté
+
+================================================================================
+
+CONFIGURATION ACTUELLE:
+
+  Batch size: 10 podcasts (Gemini)
+  Pause: 2000ms entre batches
+  Limite: 100 podcasts (pour test)
+
+POUR TRAITER PLUS:
+  Éditer scripts/categorize_and_score_podcasts.js
+  Ligne ~19: const MAX_PODCASTS_TO_PROCESS = 1000;
+
+================================================================================
+
+CHAMPS AJOUTÉS (16 TOTAL):
+
+GEMINI (8):
+  - ai_primary_category (niche Badassery)
+  - ai_secondary_categories (array)
+  - ai_topics (array 3-5)
+  - ai_target_audience (string)
+  - ai_podcast_style (Interview/Solo/etc)
+  - ai_business_relevance (1-10)
+  - ai_guest_friendly (boolean)
+  - ai_summary (2-3 phrases)
+
+SCORING INDIVIDUEL (4):
+  - ai_engagement_level (1-10)
+  - ai_audience_size (Small/Medium/Large/Very Large)
+  - ai_content_quality (1-10)
+  - ai_monetization_potential (1-10)
+
+PERCENTILE & RANKING (3):
+  - ai_category_percentile (Top 1%, 5%, 10%, 25%, 50%, Standard)
+  - ai_category_rank (position dans la catégorie)
+  - ai_category_total (nombre total dans la catégorie)
+
+BADASSERY SCORE (1):
+  - ai_badassery_score (0-100)
+
+================================================================================
+
+APRÈS LE TRAITEMENT:
+
+Utiliser les nouvelles fonctions dans podcastService.ts:
+
+  - getPodcastsByCategory('Tech Leadership & Engineering')
+  - getGuestFriendlyPodcasts(7, 50)
+  - getBestPodcastsForOutreach(100)
+  - getPodcastsByTopic('AI')
+
+Afficher dans l'UI:
+  - Filtres par niche
+  - Score business relevance
+  - Badge "Guest-Friendly"
+  - Scores engagement/quality
+
+================================================================================
+
+TROUBLESHOOTING:
+
+❌ "GEMINI_API_KEY not defined"
+   → Définir la variable ou éditer le script
+
+❌ "Rate limit exceeded"
+   → Augmenter PAUSE_BETWEEN_BATCHES (3000-5000ms)
+
+❌ "Cannot find module @google/generative-ai"
+   → npm install
+
+❌ Script bloqué
+   → Vérifier connexion internet
+   → Vérifier clé API valide
+
+================================================================================
+
+TEMPS ESTIMÉ:
+
+  100 podcasts: 5-8 minutes
+  1,000 podcasts: 50-80 minutes
+  10,000 podcasts: 8-13 heures
+  200,000 podcasts: 7-10 jours
+
+Recommandation: Faire par batches de 1,000-10,000
+
+================================================================================
+
+VOUS ÊTES PRÊT! 🚀
+
+Lancer: LANCER_AI_COMPLETE.bat
+
+================================================================================

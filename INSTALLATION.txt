@@ -1,0 +1,52 @@
+================================================================================
+  INSTALLATION - DEPENDENCIES REQUISES
+================================================================================
+
+Avant de lancer la categorisation AI, installer les dependances:
+
+1. Ouvrir PowerShell ou CMD
+
+2. Naviguer vers le dossier:
+   cd "C:\Users\admin\OneDrive\Bureau\Dossier danielle"
+
+3. Installer les packages:
+   npm install
+
+   Cela installera:
+   - firebase-admin (deja installe)
+   - @google/generative-ai (nouveau - pour AI categorization)
+
+================================================================================
+
+VERIFICATION:
+
+Une fois installe, verifier avec:
+   npm list @google/generative-ai
+
+Vous devriez voir:
+   @google/generative-ai@0.21.0
+
+================================================================================
+
+OBTENIR UNE CLE API GEMINI:
+
+1. Aller sur: https://makersuite.google.com/app/apikey
+2. Cliquer "Create API Key"
+3. Copier la cle (commence par "AIza...")
+
+4. Definir la variable d'environnement:
+   set GEMINI_API_KEY=AIza...votre_cle_ici
+
+OU editer le fichier scripts/categorize_podcasts_with_ai.js ligne 12:
+   const genAI = new GoogleGenerativeAI('AIza...votre_cle_ici');
+
+================================================================================
+
+PUIS LANCER:
+
+Double-cliquer sur: LANCER_AI_CATEGORIZATION.bat
+
+OU en ligne de commande:
+   node scripts/categorize_podcasts_with_ai.js
+
+================================================================================

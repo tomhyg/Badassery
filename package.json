@@ -1,0 +1,19 @@
+{
+  "name": "dossier-danielle",
+  "version": "1.0.0",
+  "description": "",
+  "main": "import_clients.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "csv-parser": "^3.2.0",
+    "firebase-admin": "^13.7.0",
+    "protobufjs": "^8.0.0"
+  }
+}
