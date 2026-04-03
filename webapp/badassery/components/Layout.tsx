@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { LayoutDashboard, Mic, Users, Send, Settings, LogOut, Bell, Menu, ChevronDown, ChevronRight, BarChart3, Activity, Sparkles } from 'lucide-react';
+import { InitialsAvatar } from './InitialsAvatar';
 import { User } from '../types';
-import { Brooklyn } from './Brooklyn';
 
 interface LayoutProps {
   children: React.ReactNode;
   user: User;
   activeTab: string;
   onNavigate: (tab: string) => void;
+  viewerMode?: boolean;
 }
 
 interface NavItem {
@@ -20,48 +21,17 @@ interface NavItem {
   }>;
 }
 
-export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNavigate }) => {
+export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNavigate, viewerMode = false }) => {
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({
     podcasts: true,
     clients: true,
-    outreach: true
   });
 
   const navItems: NavItem[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    {
-      id: 'podcasts',
-      label: 'Podcasts',
-      icon: Mic,
-      submenu: [
-        { id: 'podcasts', label: 'Search' },
-        { id: 'podcasts-new', label: 'Add New' },
-        { id: 'apple-charts', label: 'Apple Charts' },
-        { id: 'spotify-charts', label: 'Spotify Charts' }
-      ]
-    },
-    {
-      id: 'clients',
-      label: 'Clients',
-      icon: Users,
-      submenu: [
-        { id: 'clients', label: 'All' },
-        { id: 'client-onboarding', label: 'Add New' }
-      ]
-    },
-    {
-      id: 'outreach',
-      label: 'Outreach',
-      icon: Send,
-      submenu: [
-        { id: 'outreach', label: 'Kanban' },
-        { id: 'outreach-list', label: 'List' }
-      ]
-    },
-    { id: 'ai-matching', label: 'AI Matching', icon: Sparkles },
-    { id: 'reports', label: 'Reports', icon: BarChart3 },
-    { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'activity', label: 'Activity', icon: Activity }
+    { id: 'podcasts', label: 'Podcasts', icon: Mic },
+    { id: 'clients', label: 'Clients', icon: Users },
+    { id: 'outreach', label: 'Outreach', icon: Send },
   ];
 
   const toggleMenu = (menuId: string) => {
@@ -77,13 +47,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNav
       <aside className="w-64 bg-slate-900 text-white flex flex-col flex-shrink-0">
         <div className="p-6 border-b border-slate-800">
           <div className="flex items-center gap-3">
-             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-lg">B</div>
+             <img src="/logo.webp" alt="Badassery" className="w-8 h-8 rounded-lg object-contain" />
              <span className="font-bold text-xl tracking-tight">BADASSERY</span>
           </div>
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navItems.map(item => (
+          {(viewerMode ? navItems.filter(i => i.id === 'podcasts') : navItems).map(item => (
             <div key={item.id} className="space-y-1">
               {/* Main menu item */}
               <button
@@ -147,18 +117,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNav
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 flex-shrink-0 relative">
-          {/* Brooklyn Spider Animation */}
-          <div className="absolute inset-0 pointer-events-none z-10">
-            <Brooklyn />
-          </div>
-
-          <div className="flex items-center gap-4 relative z-20">
+        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 flex-shrink-0">
+          <div className="flex items-center gap-4">
             <Menu className="text-slate-400 lg:hidden" />
-            {/* More space for Brooklyn! 🕷️ */}
           </div>
 
-          <div className="flex items-center gap-6 relative z-20">
+          <div className="flex items-center gap-6">
             <button className="relative text-slate-400 hover:text-slate-600">
               <Bell size={20} />
               <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
@@ -168,7 +132,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeTab, onNav
                 <div className="text-sm font-semibold text-slate-900">{user.display_name}</div>
                 <div className="text-xs text-slate-500 capitalize">{user.role}</div>
               </div>
-              <img src={user.avatar_url} alt={user.display_name} className="w-9 h-9 rounded-full bg-indigo-100 border border-slate-200" />
+              <InitialsAvatar name={user.display_name} src={user.avatar_url} size="sm" className="border border-slate-200" />
             </div>
           </div>
         </header>

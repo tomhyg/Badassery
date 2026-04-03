@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { LogIn, Loader2, AlertCircle, Mic, ArrowLeft } from 'lucide-react';
-import { clientLogin, User } from '../services/userService';
+import { LogIn, Loader2, AlertCircle, Mic, ArrowLeft, Mail, CheckCircle } from 'lucide-react';
+import { clientLoginWithFirebaseAuth, sendClientPasswordReset, User } from '../services/userService';
 
 interface ClientLoginProps {
   onLoginSuccess: (user: User, clientId: string) => void;
@@ -8,10 +8,17 @@ interface ClientLoginProps {
 }
 
 export const ClientLogin: React.FC<ClientLoginProps> = ({ onLoginSuccess, onSwitchToAdmin }) => {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Forgot password state
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotError, setForgotError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,8 +26,7 @@ export const ClientLogin: React.FC<ClientLoginProps> = ({ onLoginSuccess, onSwit
     setError('');
 
     try {
-      const result = await clientLogin(firstName, lastName);
-
+      const result = await clientLoginWithFirebaseAuth(email, password);
       if (result.success && result.user && result.clientId) {
         onLoginSuccess(result.user, result.clientId);
       } else {
@@ -33,16 +39,29 @@ export const ClientLogin: React.FC<ClientLoginProps> = ({ onLoginSuccess, onSwit
     }
   };
 
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    setForgotError('');
+    const result = await sendClientPasswordReset(forgotEmail);
+    if (result.success) {
+      setForgotSent(true);
+    } else {
+      setForgotError(result.error || 'Failed to send reset email');
+    }
+    setForgotLoading(false);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-900 via-rose-900 to-slate-900 flex items-center justify-center p-4">
       {/* Background decoration */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-rose-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse delay-1000"></div>
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse" />
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-rose-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse delay-1000" />
       </div>
 
       <div className="relative w-full max-w-md">
-        {/* Back to Admin Link */}
+        {/* Back to Admin */}
         {onSwitchToAdmin && (
           <button
             onClick={onSwitchToAdmin}
@@ -53,7 +72,7 @@ export const ClientLogin: React.FC<ClientLoginProps> = ({ onLoginSuccess, onSwit
           </button>
         )}
 
-        {/* Logo/Brand */}
+        {/* Brand */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-pink-500 to-rose-600 rounded-2xl shadow-lg mb-4">
             <Mic size={32} className="text-white" />
@@ -62,84 +81,130 @@ export const ClientLogin: React.FC<ClientLoginProps> = ({ onLoginSuccess, onSwit
           <p className="text-pink-200">Badassery Podcast Booking</p>
         </div>
 
-        {/* Login Card */}
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-8">
-          <h2 className="text-xl font-bold text-white mb-6 text-center">
-            Welcome Back
-          </h2>
 
-          <p className="text-pink-200 text-sm text-center mb-6">
-            Enter your first and last name to access your dashboard
-          </p>
+          {/* ── Forgot password view ── */}
+          {showForgot ? (
+            <>
+              <button
+                onClick={() => { setShowForgot(false); setForgotSent(false); setForgotError(''); }}
+                className="flex items-center gap-1 text-pink-300 hover:text-white text-sm mb-5 transition-colors"
+              >
+                <ArrowLeft size={14} /> Back to login
+              </button>
 
-          {error && (
-            <div className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-3 text-red-200">
-              <AlertCircle size={20} />
-              <span>{error}</span>
-            </div>
-          )}
+              <h2 className="text-xl font-bold text-white mb-2">Reset Password</h2>
+              <p className="text-pink-200 text-sm mb-6">
+                Enter your email and we'll send you a reset link.
+              </p>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-pink-200 mb-2">
-                First Name
-              </label>
-              <input
-                type="text"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                placeholder="Enter your first name"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent transition-all"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-pink-200 mb-2">
-                Last Name
-              </label>
-              <input
-                type="text"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                placeholder="Enter your last name"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent transition-all"
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading || !firstName || !lastName}
-              className="w-full py-3 bg-gradient-to-r from-pink-600 to-rose-600 text-white font-semibold rounded-lg hover:from-pink-700 hover:to-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 size={20} className="animate-spin" />
-                  Signing in...
-                </>
+              {forgotSent ? (
+                <div className="flex flex-col items-center gap-3 py-4">
+                  <CheckCircle size={40} className="text-green-400" />
+                  <p className="text-white font-semibold text-center">Reset email sent!</p>
+                  <p className="text-pink-200 text-sm text-center">
+                    Check your inbox at <strong>{forgotEmail}</strong>
+                  </p>
+                  <button
+                    onClick={() => { setShowForgot(false); setForgotSent(false); }}
+                    className="mt-2 text-sm text-pink-300 hover:text-white underline"
+                  >
+                    Back to login
+                  </button>
+                </div>
               ) : (
-                <>
-                  <LogIn size={20} />
-                  Access My Dashboard
-                </>
+                <form onSubmit={handleForgotSubmit} className="space-y-4">
+                  {forgotError && (
+                    <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-2 text-red-200 text-sm">
+                      <AlertCircle size={16} /> {forgotError}
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium text-pink-200 mb-2">Email</label>
+                    <input
+                      type="email"
+                      value={forgotEmail}
+                      onChange={e => setForgotEmail(e.target.value)}
+                      placeholder="your@email.com"
+                      required
+                      className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading || !forgotEmail}
+                    className="w-full py-3 bg-gradient-to-r from-pink-600 to-rose-600 text-white font-semibold rounded-lg hover:from-pink-700 hover:to-rose-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {forgotLoading ? <Loader2 size={18} className="animate-spin" /> : <Mail size={18} />}
+                    {forgotLoading ? 'Sending…' : 'Send Reset Link'}
+                  </button>
+                </form>
               )}
-            </button>
-          </form>
+            </>
+          ) : (
+            /* ── Login view ── */
+            <>
+              <h2 className="text-xl font-bold text-white mb-6 text-center">Welcome Back</h2>
 
-          {/* Info */}
-          <div className="mt-6 pt-6 border-t border-white/10">
-            <p className="text-sm text-pink-300 text-center">
-              Your name must match our records exactly.
-              <br />
-              Contact us if you have trouble logging in.
-            </p>
-          </div>
+              {error && (
+                <div className="mb-5 p-4 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-3 text-red-200">
+                  <AlertCircle size={20} /> <span>{error}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-pink-200 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="your@email.com"
+                    required
+                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-pink-200 mb-2">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div className="text-right">
+                  <button
+                    type="button"
+                    onClick={() => { setShowForgot(true); setForgotEmail(email); }}
+                    className="text-sm text-pink-300 hover:text-white transition-colors"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading || !email || !password}
+                  className="w-full py-3 bg-gradient-to-r from-pink-600 to-rose-600 text-white font-semibold rounded-lg hover:from-pink-700 hover:to-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg"
+                >
+                  {isLoading ? (
+                    <><Loader2 size={20} className="animate-spin" /> Signing in…</>
+                  ) : (
+                    <><LogIn size={20} /> Access My Dashboard</>
+                  )}
+                </button>
+              </form>
+            </>
+          )}
         </div>
 
-        {/* Footer */}
         <p className="text-center text-pink-300 text-sm mt-6">
-          Badassery &copy; 2024 - Client Portal
+          Badassery &copy; 2024 · Client Portal
         </p>
       </div>
     </div>

@@ -8,6 +8,7 @@ import {
   invalidateOutreachCache
 } from '../services/outreachServiceV2';
 import { getPodcastForOutreach } from '../services/podcastService';
+import { getClientById } from '../services/clientService';
 import { getFollowUpStats } from '../services/outreachAutomationService';
 import { getAIConfig } from '../services/aiConfigService';
 import { Outreach, OutreachStatus, Podcast } from '../types';
@@ -15,15 +16,18 @@ import {
   Mail, User, Calendar, Award, ExternalLink,
   Filter, ChevronDown, AlertCircle, CheckCircle2,
   Clock, XCircle, DollarSign, Ban, Send, Bell, Eye, EyeOff,
-  MessageSquare, Copy, X, Info
+  MessageSquare, Copy, X, Info, Trash2
 } from 'lucide-react';
 import { FollowUpReviewModal } from '../components/FollowUpReviewModal';
 import { OutreachActionModal } from '../components/OutreachActionModal';
+import { PrepEmailModal } from '../components/PrepEmailModal';
 import { PodcastDetailModal } from '../components/PodcastDetailModal';
 import { BlacklistModal } from '../components/BlacklistModal';
 import { EmailActionType } from '../services/outreachEmailActionsService';
 import { PodcastDocument } from '../services/podcastService';
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp, collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '../services/firebase';
+import { generateReviewToken } from '../services/reviewService';
 
 type EnrichedOutreach = Outreach & { podcast?: Podcast | null };
 
@@ -94,6 +98,15 @@ export const OutreachKanban: React.FC = () => {
     isOpen: boolean;
     outreach: EnrichedOutreach | null;
   }>({ isOpen: false, outreach: null });
+
+  // Prep email modal state
+  const [prepModal, setPrepModal] = useState<{ item: EnrichedOutreach; client: any } | null>(null);
+
+  // Clear all outreach modal state
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState('');
+  const [clearing, setClearing] = useState(false);
+  const [clearToast, setClearToast] = useState(false);
 
   // Main workflow statuses (always visible)
   const MAIN_WORKFLOW_STATUSES: OutreachStatus[] = [
@@ -189,6 +202,20 @@ export const OutreachKanban: React.FC = () => {
   const handleStatusChange = async (outreachId: string, newStatus: OutreachStatus) => {
     try {
       await updateOutreachStatusV2(outreachId, newStatus);
+      // When moving to "recorded", auto-generate a review token
+      if (newStatus === 'recorded') {
+        const item = allOutreach.find(o => o.id === outreachId);
+        if (item && !item.review_token) {
+          const token = await generateReviewToken({
+            id: item.id,
+            client_id: item.client_id,
+            client_name: item.client_name,
+            podcast_id: item.podcast_id,
+            podcast_name: item.podcast_name,
+          });
+          await updateOutreachV2(outreachId, { review_token: token });
+        }
+      }
       await loadOutreach();
     } catch (error) {
       console.error('Error updating outreach status:', error);
@@ -220,6 +247,34 @@ export const OutreachKanban: React.FC = () => {
     await loadOutreach();
     await loadFollowUpStats();
     closeActionModal();
+  };
+
+  // Delete all outreach documents
+  const handleClearAllOutreach = async () => {
+    setClearing(true);
+    try {
+      const snap = await getDocs(collection(db, 'outreach'));
+      await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'outreach', d.id))));
+      invalidateOutreachCache();
+      setAllOutreach([]);
+      setShowClearModal(false);
+      setClearConfirmText('');
+      setClearToast(true);
+      setTimeout(() => setClearToast(false), 3000);
+    } catch (err) {
+      console.error('Failed to clear outreach:', err);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  // Open prep email modal — fetch full client data on demand
+  const openPrepModal = async (item: EnrichedOutreach) => {
+    let clientData = item.client || null;
+    if (!clientData && item.client_id) {
+      try { clientData = await getClientById(item.client_id); } catch {}
+    }
+    setPrepModal({ item, client: clientData || {} });
   };
 
   // Handle blacklist confirmation
@@ -460,7 +515,17 @@ export const OutreachKanban: React.FC = () => {
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-bold text-gray-900">Outreach Pipeline</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-gray-900">Outreach Pipeline</h1>
+            <button
+              onClick={() => { setShowClearModal(true); setClearConfirmText(''); }}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-red-400 border border-red-200 rounded hover:bg-red-50 hover:text-red-600 transition-colors opacity-60 hover:opacity-100"
+              title="Clear all outreach data"
+            >
+              <Trash2 size={12} />
+              Clear All
+            </button>
+          </div>
 
           {/* Follow-up Stats Widget */}
           {followUpStats && followUpStats.total > 0 && (
@@ -849,14 +914,28 @@ export const OutreachKanban: React.FC = () => {
                             </button>
                           )}
 
-                          {/* Send Prep Email - visible 5 days before screening/recording */}
-                          {shouldShowPrepButton(item) && (
+                          {/* Copy Review Link - visible if recorded and token exists */}
+                          {item.status === 'recorded' && (item as any).review_token && (
                             <button
-                              onClick={() => openActionModal(item, 'prep')}
-                              className="flex-1 px-2 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded hover:bg-blue-100 flex items-center justify-center gap-1 transition-colors"
+                              onClick={() => {
+                                const url = `${window.location.origin}/?review=${(item as any).review_token}`;
+                                navigator.clipboard.writeText(url);
+                              }}
+                              className="flex-1 px-2 py-1.5 bg-rose-50 text-rose-600 text-xs font-medium rounded hover:bg-rose-100 flex items-center justify-center gap-1 transition-colors"
+                            >
+                              <Copy size={12} />
+                              Copy Review Link
+                            </button>
+                          )}
+
+                          {/* Generate Prep Email - visible on all recording_scheduled cards */}
+                          {item.status === 'recording_scheduled' && (
+                            <button
+                              onClick={() => openPrepModal(item)}
+                              className="flex-1 px-2 py-1.5 bg-indigo-50 text-indigo-700 text-xs font-medium rounded hover:bg-indigo-100 flex items-center justify-center gap-1 transition-colors"
                             >
                               <Mail size={12} />
-                              Send Prep
+                              ✉️ Prep Email
                             </button>
                           )}
 
@@ -1091,6 +1170,82 @@ export const OutreachKanban: React.FC = () => {
         onClose={() => setBlacklistModal({ isOpen: false, outreach: null })}
         onConfirm={handleBlacklistConfirm}
       />
+
+      {/* Clear All Outreach Modal */}
+      {showClearModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-red-600 flex items-center gap-2">
+                <Trash2 size={18} /> Delete All Outreach Data
+              </h2>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-slate-700">
+                Are you sure? This will permanently delete <strong>ALL outreach data</strong>. This cannot be undone.
+              </p>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Type <span className="font-mono font-bold text-red-600">DELETE</span> to confirm
+                </label>
+                <input
+                  type="text"
+                  value={clearConfirmText}
+                  onChange={(e) => setClearConfirmText(e.target.value)}
+                  placeholder="DELETE"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 py-4 border-t border-slate-200">
+              <button
+                onClick={() => { setShowClearModal(false); setClearConfirmText(''); }}
+                className="flex-1 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearAllOutreach}
+                disabled={clearConfirmText !== 'DELETE' || clearing}
+                className="flex-1 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {clearing ? 'Deleting…' : 'Delete Everything'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {clearToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-5 py-3 rounded-lg shadow-xl z-50 flex items-center gap-2">
+          <Trash2 size={14} /> All outreach data deleted
+        </div>
+      )}
+
+      {prepModal && (() => {
+        const item = prepModal.item;
+        const podcast = item.podcast as any;
+        let recordingDateStr = 'TBD';
+        if (item.recording_date?.toDate) {
+          recordingDateStr = item.recording_date.toDate().toLocaleDateString('en-US', {
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+          });
+        }
+        return (
+          <PrepEmailModal
+            client={prepModal.client}
+            podcastName={item.podcast_name || podcast?.title || 'Unknown Podcast'}
+            podcastDescription={podcast?.description || podcast?.ai_summary || ''}
+            podcastUrl={item.podcast_url || podcast?.website_url || ''}
+            hostName={(item as any).host_name || ''}
+            recordingDateStr={recordingDateStr}
+            onClose={() => setPrepModal(null)}
+          />
+        );
+      })()}
     </div>
   );
 };

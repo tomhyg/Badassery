@@ -63,7 +63,8 @@ const SKIP_CHARTS = argv.includes('--skip-charts');
 const VERBOSE     = argv.includes('--verbose');
 const REPORT        = argv.includes('--report');
 const NO_DEDUP      = argv.includes('--no-dedup');
-const NO_CHECKPOINT = argv.includes('--no-checkpoint');
+const NO_CHECKPOINT   = argv.includes('--no-checkpoint');
+const SKIP_TO_PHASE6  = argv.includes('--skip-phases-1-5');
 const RANDOM        = argv.includes('--random');
 const limitArg    = argv.find(a => a.startsWith('--limit='));
 const batchArg    = argv.find(a => a.startsWith('--batch-size='));
@@ -76,6 +77,7 @@ const DATA_DIR       = path.join(__dirname, '../data');
 const CHECKPOINT_DIR = path.join(DATA_DIR, 'checkpoints');
 const APPLE_CACHE    = path.join(DATA_DIR, 'apple_charts_cache.json');
 const SPOTIFY_CACHE  = path.join(DATA_DIR, 'spotify_charts_cache.json');
+const REJECTED_PATH  = path.join(DATA_DIR, 'rejected_itunesids.json');
 const REPORTS_DIR    = path.join(__dirname, '../reports');
 
 // Collects stats from each phase for the --report output
@@ -149,7 +151,7 @@ async function runConcurrent(items, workerFn, concurrency) {
 
 // ── Phase 1 — SQLite discovery ─────────────────────────────────────────────────
 
-function phase1_discoverFromSQLite() {
+function phase1_discoverFromSQLite(excludeIds = new Set()) {
   log('Phase 1 — SQLite candidate discovery', 'PHASE');
 
   const sqlite = new Database(DB_PATH, { readonly: true });
@@ -196,7 +198,10 @@ function phase1_discoverFromSQLite() {
   sqlite.close();
 
   const total = rows.length;
+  // Exclude already-processed IDs BEFORE applying LIMIT so we advance
+  // past already-seen candidates instead of always re-pulling the same top N.
   const feeds = rows
+    .filter(row => !excludeIds.has(String(row.itunesId)))
     .slice(0, LIMIT === Infinity ? undefined : LIMIT)
     .map(row => ({ ...row, itunesId: String(row.itunesId) }));
 
@@ -558,6 +563,66 @@ function saveCheckpoint(batch, batchNumber) {
   return fpath;
 }
 
+/**
+ * Fetch every itunesId already written to Firestore using paginated reads.
+ * Uses .select('updatedAt') so only one tiny field is transferred per doc —
+ * we only need doc.id (which equals itunesId) to build the exclusion set.
+ * @returns {Promise<Set<string>>}
+ */
+async function loadFirestoreItunesIds() {
+  const firestore = initFirebase();
+  const ids       = new Set();
+  let   lastDoc   = null;
+
+  process.stdout.write('[P1] Loading existing Firestore IDs...');
+
+  while (true) {
+    let q = firestore.collection('podcasts').select('updatedAt').limit(500);
+    if (lastDoc) q = q.startAfter(lastDoc);
+
+    const snap = await q.get();
+    if (snap.empty) break;
+
+    for (const doc of snap.docs) ids.add(doc.id);
+
+    lastDoc = snap.docs[snap.docs.length - 1];
+    process.stdout.write(`\r[P1] Loading existing Firestore IDs... ${ids.size}`);
+    if (snap.docs.length < 500) break;
+  }
+
+  process.stdout.write('\n');
+  log(`Firestore pre-check: ${ids.size.toLocaleString()} existing podcasts`);
+  return ids;
+}
+
+// ── Rejected IDs (Phase 3b non-guest-friendly) ────────────────────────────────
+
+function loadRejectedIds() {
+  if (!fs.existsSync(REJECTED_PATH)) return new Set();
+  try {
+    return new Set(JSON.parse(fs.readFileSync(REJECTED_PATH, 'utf8')));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Persist Phase 3b rejections so they are excluded from future SQLite draws.
+ * Only saves definitive Gemini rejections — not transient episode-fetch errors.
+ */
+function saveRejectedIds(batch) {
+  const P3B_DROP_REASONS = new Set(['guest_ratio_below_threshold', 'not_guest_friendly']);
+  const newIds = batch
+    .filter(f => P3B_DROP_REASONS.has(f._drop))
+    .map(f => String(f.itunesId));
+  if (newIds.length === 0) return;
+
+  const existing = loadRejectedIds();
+  for (const id of newIds) existing.add(id);
+  fs.writeFileSync(REJECTED_PATH, JSON.stringify([...existing]), 'utf8');
+  log(`Saved ${newIds.length} rejected IDs to rejected_itunesids.json (total: ${existing.size.toLocaleString()})`);
+}
+
 function loadExistingCheckpoints() {
   const files       = existingCheckpointFiles();
   const allFeeds    = [];
@@ -589,27 +654,43 @@ function loadExistingCheckpoints() {
 // ── Phase 4 — Full enrichment ─────────────────────────────────────────────────
 
 async function phase4_enrichPodcasts(feeds) {
-  log(`Phase 4 — Enriching ${feeds.length} feeds (20 concurrent workers)`, 'PHASE');
+  log(`Phase 4 — Enriching ${feeds.length} feeds (5 concurrent workers, browser restart every 50)`, 'PHASE');
 
+  // 5 workers (not 20) to limit simultaneous Brotli/zlib decompression operations
+  // that saturate the V8 heap. Restart the shared Chromium every 50 feeds so
+  // accumulated CDP string allocations are released before they hit the 4GB limit.
+  const BROWSER_RESTART_EVERY = 50;
+  const CONCURRENCY           = 5;
   const stats = { done: 0, email: 0, apple: 0, spotify: 0, youtube: 0, instagram: 0, twitter: 0 };
 
-  await runConcurrent(feeds, async feed => {
-    await enrichPodcast(feed);
-
-    stats.done++;
-    if (feed.rss_owner_email)   stats.email++;
-    if (feed.apple_rating)      stats.apple++;
-    if (feed.spotify_rating)    stats.spotify++;
-    if (feed.yt_subscribers)    stats.youtube++;
-    if (feed.instagram_followers) stats.instagram++;
-    if (feed.twitter_followers) stats.twitter++;
-
-    if (stats.done % 5 === 0 || stats.done === feeds.length) {
-      process.stdout.write(
-        `\r  [P4] ${stats.done}/${feeds.length} — email:${stats.email} apple:${stats.apple} spotify:${stats.spotify} yt:${stats.youtube} ig:${stats.instagram} tw:${stats.twitter}   `
-      );
+  for (let i = 0; i < feeds.length; i += BROWSER_RESTART_EVERY) {
+    if (i > 0) {
+      await closeBrowser(); // kill Chromium; next getBrowser() spawns fresh
+      if (typeof global.gc === 'function') {
+        global.gc();
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
-  }, 20);
+    const chunk = feeds.slice(i, i + BROWSER_RESTART_EVERY);
+
+    await runConcurrent(chunk, async feed => {
+      await enrichPodcast(feed);
+
+      stats.done++;
+      if (feed.rss_owner_email)     stats.email++;
+      if (feed.apple_rating)        stats.apple++;
+      if (feed.spotify_rating)      stats.spotify++;
+      if (feed.yt_subscribers)      stats.youtube++;
+      if (feed.instagram_followers) stats.instagram++;
+      if (feed.twitter_followers)   stats.twitter++;
+
+      if (stats.done % 5 === 0 || stats.done === feeds.length) {
+        process.stdout.write(
+          `\r  [P4] ${stats.done}/${feeds.length} — email:${stats.email} apple:${stats.apple} spotify:${stats.spotify} yt:${stats.youtube} ig:${stats.instagram} tw:${stats.twitter}   `
+        );
+      }
+    }, CONCURRENCY);
+  }
 
   process.stdout.write('\n');
   log(`Phase 4 done — ${stats.done} enriched`, 'SUCCESS');
@@ -923,26 +1004,44 @@ async function main() {
   console.log(`  Batch size: ${BATCH_SIZE}`);
   if (VERBOSE)     console.log('  --verbose : per-feed detail logged after each phase');
   if (REPORT)      console.log('  --report  : markdown report saved to reports/');
-  if (SKIP_PHASE1)   console.log('  --skip-phase1   : loading from checkpoints, skipping phases 3 + 3b');
+  if (SKIP_PHASE1)      console.log('  --skip-phase1      : loading from checkpoints, skipping phases 3 + 3b');
+  if (SKIP_TO_PHASE6)   console.log('  --skip-phases-1-5  : loading checkpoints, running Phase 6 + 7 only (no network)');
   if (NO_DEDUP)      console.log('  --no-dedup      : skip itunesId dedup, process all feeds fresh');
   if (NO_CHECKPOINT) console.log('  --no-checkpoint : ignore existing checkpoints, start fresh');
   if (RANDOM)        console.log('  --random        : random draw from SQLite instead of ORDER BY popularityScore');
   console.log('='.repeat(72) + '\n');
 
   // ── Load existing checkpoints (for dedup on resume) ────────────────────────
-  const { processedIds } = NO_CHECKPOINT
+  const { processedIds } = (NO_CHECKPOINT || SKIP_TO_PHASE6)
     ? { feeds: [], processedIds: new Set() }
     : loadExistingCheckpoints();
 
   // ── Phase 1 ────────────────────────────────────────────────────────────────
   let allFeeds;
-  if (SKIP_PHASE1) {
+  if (SKIP_TO_PHASE6) {
+    // Load checkpoint feeds directly — all Phase 1-5 data already present
+    const { feeds } = loadExistingCheckpoints();
+    allFeeds = LIMIT !== Infinity ? feeds.slice(0, LIMIT) : feeds;
+    log(`Loaded ${allFeeds.length} feeds from checkpoints (--skip-phases-1-5)`);
+  } else if (SKIP_PHASE1) {
     // Load already-passed feeds from checkpoints; apply --limit
     const { feeds } = loadExistingCheckpoints();
     allFeeds = LIMIT !== Infinity ? feeds.slice(0, LIMIT) : feeds;
     log(`Loaded ${allFeeds.length} feeds from checkpoints (--skip-phase1)`);
   } else {
-    allFeeds = phase1_discoverFromSQLite();
+    // Build combined exclusion set before querying SQLite so LIMIT is applied
+    // AFTER skipping already-processed IDs — otherwise we always re-pull the
+    // same top-N candidates and never advance through the pool.
+    let excludeIds = NO_DEDUP ? new Set() : new Set(processedIds);
+    const rejectedIds = NO_DEDUP ? new Set() : loadRejectedIds();
+    for (const id of rejectedIds) excludeIds.add(id);
+    if (!DRY_RUN && !NO_DEDUP) {
+      const firestoreIds = await loadFirestoreItunesIds();
+      for (const id of firestoreIds) excludeIds.add(id);
+      log(`Excluding ${excludeIds.size.toLocaleString()} IDs (${processedIds.size} checkpoints + ${firestoreIds.size} Firestore + ${rejectedIds.size.toLocaleString()} rejected)`);
+    }
+
+    allFeeds = phase1_discoverFromSQLite(excludeIds);
     verbosePhase('Phase 1 — SQLite candidates', allFeeds.map(f => ({
       feedId: f.feedId, itunesId: f.itunesId, title: f.title,
       language: f.language, episodeCount: f.episodeCount,
@@ -952,21 +1051,15 @@ async function main() {
       homepageUrl: f.homepageUrl, imageUrl: f.imageUrl,
       description: f.description,
     })));
-
-    // Skip already-processed itunesIds (resume support) — bypassed with --no-dedup
-    if (!NO_DEDUP && processedIds.size > 0) {
-      const before = allFeeds.length;
-      allFeeds = allFeeds.filter(f => !processedIds.has(String(f.itunesId)));
-      if (before !== allFeeds.length) {
-        log(`Skipped ${(before - allFeeds.length).toLocaleString()} already-processed feeds`);
-      }
-    }
   }
 
   if (allFeeds.length === 0) {
     log('No new feeds to process.', 'WARN');
     process.exit(0);
   }
+
+  // ── Phases 2–5 (skipped when --skip-phases-1-5) ────────────────────────────
+  if (!SKIP_TO_PHASE6) {
 
   // ── Phase 2 ────────────────────────────────────────────────────────────────
   if (!SKIP_CHARTS && !SKIP_PHASE1) {
@@ -1028,6 +1121,17 @@ async function main() {
         })));
       }
 
+      // Persist Phase 3b rejections so future runs skip them in SQLite
+      saveRejectedIds(batch);
+
+      // Free large Phase 3 fields — episodes + raw Gemini text are not needed
+      // past this point and can hold tens of MB across a 500-feed batch.
+      for (const feed of batch) {
+        delete feed.episodes;
+        delete feed._p3b_raw_response;
+        delete feed._p3b_prompt;
+      }
+
       // Phase 4: enrich only guest-friendly feeds (those without _drop)
       const toEnrich = batch.filter(f => !f._drop);
       if (toEnrich.length > 0) {
@@ -1069,6 +1173,8 @@ async function main() {
     // Always close Puppeteer, even on crash
     await closeBrowser();
   }
+
+  } // end if (!SKIP_TO_PHASE6)
 
   // ── Phase 6 — Badassery Score + Percentiles (post-batch, global norms) ──────
   const toScore6 = allFeeds.filter(f => !f._drop && f.aiCategorizationStatus === 'completed');

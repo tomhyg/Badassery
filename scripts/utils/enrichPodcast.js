@@ -620,12 +620,8 @@ async function enrichPodcast(feed) {
     await sleep(1000);
   }
 
-  // 4e — Instagram (only if URL was found by 4a)
-  if (feed.website_instagram) {
-    await acquirePuppeteerSlot();
-    try { Object.assign(feed, await step4e_instagram(feed)); } catch {} finally { releasePuppeteerSlot(); }
-    await sleep(1000);
-  }
+  // 4e — Instagram follower scraping disabled (login wall blocks ~100% of requests)
+  // website_instagram URL is still detected by step 4a and kept on the feed object.
 
   // 4f — Twitter followers (only if URL found by 4a; best-effort, low success rate)
   if (feed.website_twitter) {

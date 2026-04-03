@@ -7,24 +7,29 @@ import { PodcastsReal } from './pages/PodcastsReal';
 import { Clients } from './pages/Clients';
 import { ClientDetailNew } from './pages/ClientDetailNew';
 import { ClientOnboardingNew } from './pages/ClientOnboardingNew';
-import { OutreachBoard } from './pages/Outreach';
-import { OutreachList } from './pages/OutreachList';
-import { OutreachKanban } from './pages/OutreachKanban';
+import { OutreachPage } from './pages/OutreachPage';
 import { Settings } from './pages/SettingsNew';
 import { FirestoreDebug } from './pages/FirestoreDebug';
 import { ClientPortal } from './pages/ClientPortal';
+import { ChangePassword } from './pages/ChangePassword';
 import { Login } from './pages/Login';
 import { ClientLogin } from './pages/ClientLogin';
 import { AIMatching } from './pages/AIMatching';
-import { AppleCharts } from './pages/AppleCharts';
-import { SpotifyCharts } from './pages/SpotifyCharts';
 import { TestDataGenerator } from './pages/TestDataGenerator';
 import { DevRoleSwitcher } from './components/DevRoleSwitcher';
-import { currentUser as initialUser, podcasts, clients, outreachItems, activityLogs } from './services/mockData';
+import { SpeakerProfile } from './pages/SpeakerProfile';
+import { HostReview } from './pages/HostReview';
+import { currentUser as initialUser, podcasts, clients, activityLogs } from './services/mockData';
 import { getCurrentUser, clearCurrentUser, User as ServiceUser } from './services/userService';
 import { UserRole, User } from './types';
 
 const App: React.FC = () => {
+  // Public routes (no auth required)
+  const params = new URLSearchParams(window.location.search);
+  const speakId = params.get('speak');
+  if (speakId) return <SpeakerProfile clientId={speakId} />;
+  const reviewToken = params.get('review');
+  if (reviewToken) return <HostReview token={reviewToken} />;
   const [activeTab, setActiveTab] = useState('dashboard');
 
   // Expose setActiveTab to window for console access (dev only)
@@ -36,18 +41,19 @@ const App: React.FC = () => {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [currentUser, setCurrentUser] = useState<User>(initialUser);
   const [loginMode, setLoginMode] = useState<'admin' | 'client'>('admin');
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
   // Check for existing login on mount
   useEffect(() => {
     const savedUser = getCurrentUser();
     if (savedUser) {
-      // Convert ServiceUser to User type for the app
       setCurrentUser({
         id: savedUser.id,
         display_name: savedUser.display_name,
         role: savedUser.role as UserRole,
         avatar_url: savedUser.avatar_url || 'https://i.pravatar.cc/150?u=user'
       });
+      setMustChangePassword(savedUser.must_change_password ?? false);
       setIsAuthenticated(true);
     }
     setIsCheckingAuth(false);
@@ -61,6 +67,7 @@ const App: React.FC = () => {
       role: user.role as UserRole,
       avatar_url: user.avatar_url || 'https://i.pravatar.cc/150?u=user'
     });
+    setMustChangePassword(user.must_change_password ?? false);
     setIsAuthenticated(true);
   };
 
@@ -143,14 +150,31 @@ const App: React.FC = () => {
     );
   }
 
-  // Role-based rendering: If user is a client, show only the client portal
-  if (currentUser.role === 'client') {
-    // Find the mock client for dev mode
-    const mockClient = clients.find(c => c.id === currentUser.id);
+  // Viewer role: full Layout but only Podcasts page
+  if (currentUser.role === 'viewer') {
+    if (mustChangePassword) {
+      return (
+        <ChangePassword
+          userId={currentUser.id}
+          displayName={currentUser.display_name}
+          onComplete={() => setMustChangePassword(false)}
+        />
+      );
+    }
+    return (
+      <Layout user={currentUser} activeTab="podcasts" onNavigate={(tab: string) => { if (tab === 'logout') handleLogout(); }} viewerMode={true}>
+        <PodcastsReal />
+      </Layout>
+    );
+  }
 
+  // Role-based rendering: If user is a client, show only the client portal
+  // ForcePasswordChange and CompleteProfile are handled inside ClientPortal in sequence
+  if (currentUser.role === 'client') {
+    const mockClient = clients.find(c => c.id === currentUser.id);
     return (
       <>
-        <ClientPortal clientId={currentUser.id} mockClient={mockClient} />
+        <ClientPortal clientId={currentUser.id} mockClient={mockClient} onLogout={handleLogout} />
         <DevRoleSwitcher currentUser={currentUser} onSwitchRole={handleSwitchRole} availableClients={clients} />
       </>
     );
@@ -188,10 +212,6 @@ const App: React.FC = () => {
         return <PodcastsReal />;
       case 'podcasts-new':
         return <div className="p-6"><h1 className="text-2xl font-bold">Add New Podcast (Coming Soon)</h1></div>;
-      case 'apple-charts':
-        return <AppleCharts />;
-      case 'spotify-charts':
-        return <SpotifyCharts />;
 
       // Clients routes
       case 'clients':
@@ -209,13 +229,10 @@ const App: React.FC = () => {
 
       // Outreach routes
       case 'outreach':
-        return <OutreachKanban />;
       case 'outreach-list':
-        return <OutreachList />;
       case 'outreach-board':
-        return <OutreachBoard items={outreachItems} />;
       case 'outreach-kanban':
-        return <OutreachKanban />;
+        return <OutreachPage />;
 
       // AI Matching route
       case 'ai-matching':

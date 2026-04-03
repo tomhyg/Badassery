@@ -1,4 +1,4 @@
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import {
   collection,
   doc,
@@ -12,6 +12,7 @@ import {
   orderBy,
   Timestamp
 } from 'firebase/firestore';
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 
 /**
  * ============================================================================
@@ -28,7 +29,7 @@ export interface User {
   avatar_url?: string;
 
   // Rôle & Permissions
-  role: 'admin' | 'employee' | 'client';
+  role: 'admin' | 'employee' | 'client' | 'viewer';
   permissions: string[]; // ['search', 'match', 'outreach', 'clients', 'settings']
 
   // Lien vers client si role = client
@@ -41,6 +42,9 @@ export interface User {
   created_at: Timestamp;
   last_login_at: Timestamp;
   created_by: string;
+
+  // First login password change
+  must_change_password?: boolean;
 }
 
 /**
@@ -294,35 +298,37 @@ const ADMIN_USER: User = {
  */
 export async function simpleLogin(username: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
   // Check for admin credentials
-  if (username.toLowerCase() === 'brooklynn' && password === 'Brooklynn') {
-    // Update last login and store in localStorage
+  if ((username.toLowerCase() === 'admin' && password === 'admin') || (username.toLowerCase() === 'brooklynn' && password === 'Brooklynn')) {
     const userWithLogin = {
       ...ADMIN_USER,
       last_login_at: Timestamp.now()
     };
     setCurrentUser(userWithLogin);
     console.log('[UserService] Admin login successful:', username);
-
-    // Track successful login to Firestore
     try {
       await recordAdminLogin(userWithLogin.id, userWithLogin.display_name, userWithLogin.email);
     } catch (err) {
       console.error('[UserService] Failed to record login:', err);
     }
-
     return { success: true, user: userWithLogin };
   }
 
-  console.log('[UserService] Login failed for:', username);
+  // Try viewer login (email + password in Firestore viewer_users)
+  const viewerResult = await viewerLogin(username.toLowerCase(), password);
+  if (viewerResult.success) return viewerResult;
 
-  // Track failed login to Firestore
+  // Try client login via Firebase Auth (email + password)
+  const clientResult = await clientLoginWithFirebaseAuth(username.toLowerCase(), password);
+  if (clientResult.success) return clientResult;
+
+  console.log('[UserService] Login failed for:', username);
   try {
     await recordFailedAdminLogin(username, 'Invalid username or password');
   } catch (err) {
     console.error('[UserService] Failed to record failed login:', err);
   }
 
-  return { success: false, error: 'Invalid username or password' };
+  return { success: false, error: 'Invalid email or password' };
 }
 
 /**
@@ -457,4 +463,159 @@ export function getCurrentClientId(): string | null {
 export function isClient(): boolean {
   const user = getCurrentUser();
   return user?.role === 'client';
+}
+
+/**
+ * ============================================================================
+ * VIEWER LOGIN SYSTEM
+ * Accounts stored in Firestore 'viewer_users' collection
+ * ============================================================================
+ */
+
+/**
+ * Login as viewer using email + password
+ */
+export async function viewerLogin(email: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
+  try {
+    const viewerCollection = collection(db, 'viewer_users');
+    const q = query(viewerCollection, where('email', '==', email.toLowerCase()));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      return { success: false, error: 'Invalid email or password' };
+    }
+
+    const docSnap = snapshot.docs[0];
+    const data = docSnap.data();
+
+    if (data.password !== password) {
+      return { success: false, error: 'Invalid email or password' };
+    }
+
+    const user: User = {
+      id: docSnap.id,
+      email: data.email,
+      display_name: data.display_name,
+      avatar_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(data.display_name)}&background=8b5cf6&color=fff`,
+      role: 'viewer',
+      permissions: ['podcasts'],
+      client_id: null,
+      status: 'active',
+      must_change_password: data.must_change_password ?? false,
+      created_at: data.created_at || Timestamp.now(),
+      last_login_at: Timestamp.now(),
+      created_by: 'system'
+    };
+
+    setCurrentUser(user);
+
+    // Update last login in Firestore
+    await updateDoc(doc(db, 'viewer_users', docSnap.id), { last_login_at: Timestamp.now() });
+
+    console.log('[UserService] Viewer login successful:', email);
+    return { success: true, user };
+  } catch (error: any) {
+    console.error('[UserService] Viewer login error:', error);
+    return { success: false, error: 'Login failed. Please try again.' };
+  }
+}
+
+/**
+ * Change viewer password — clears must_change_password flag
+ */
+export async function changeViewerPassword(userId: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await updateDoc(doc(db, 'viewer_users', userId), {
+      password: newPassword,
+      must_change_password: false
+    });
+
+    // Update the cached user in localStorage
+    const currentUser = getCurrentUser();
+    if (currentUser) {
+      setCurrentUser({ ...currentUser, must_change_password: false });
+    }
+
+    console.log('[UserService] Viewer password changed:', userId);
+    return { success: true };
+  } catch (error: any) {
+    console.error('[UserService] Change password error:', error);
+    return { success: false, error: 'Failed to update password. Please try again.' };
+  }
+}
+
+/**
+ * ============================================================================
+ * CLIENT FIREBASE AUTH LOGIN
+ * ============================================================================
+ */
+
+/**
+ * Login as client using Firebase Authentication (email + password)
+ */
+export async function clientLoginWithFirebaseAuth(
+  email: string,
+  password: string
+): Promise<{ success: boolean; user?: User; clientId?: string; error?: string }> {
+  try {
+    const credential = await signInWithEmailAndPassword(auth, email, password);
+    const firebaseUser = credential.user;
+
+    // Find matching client in Firestore by authUid (set during account creation)
+    const clientsCollection = collection(db, 'clients');
+    const q = query(clientsCollection, where('authUid', '==', firebaseUser.uid));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      return { success: false, error: 'Client not found. Please contact your account manager.' };
+    }
+
+    const clientDoc = snapshot.docs[0];
+    const clientData = clientDoc.data();
+    const displayName = clientData.identity?.firstName
+      ? `${clientData.identity.firstName} ${clientData.identity.lastName || ''}`.trim()
+      : clientData.contact_name || email.split('@')[0];
+
+    const clientUser = {
+      id: clientDoc.id,
+      email: firebaseUser.email || email,
+      display_name: displayName,
+      avatar_url: clientData.links?.headshot || clientData.logo_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=ec4899&color=fff`,
+      role: 'client' as const,
+      permissions: ['view_profile', 'view_outreach', 'view_bookings'],
+      client_id: clientDoc.id,
+      status: 'active' as const,
+      must_change_password: clientData.must_change_password ?? false,
+      profileCompleted: clientData.profileCompleted ?? false,
+      created_at: Timestamp.now(),
+      last_login_at: Timestamp.now(),
+      created_by: 'system',
+    } as unknown as User;
+
+    setCurrentUser(clientUser);
+    return { success: true, user: clientUser, clientId: clientDoc.id };
+  } catch (error: any) {
+    console.error('[UserService] Firebase client login error:', error);
+    const msg = error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password'
+      ? 'Invalid email or password.'
+      : error.code === 'auth/user-not-found'
+      ? 'No account found with this email.'
+      : 'Login failed. Please try again.';
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Send password reset email via Firebase Auth
+ */
+export async function sendClientPasswordReset(
+  email: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await sendPasswordResetEmail(auth, email);
+    return { success: true };
+  } catch (error: any) {
+    console.error('[UserService] Password reset error:', error);
+    return { success: false, error: 'Could not send reset email. Check the address and try again.' };
+  }
 }

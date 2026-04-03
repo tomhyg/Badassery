@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "node ../../scripts/export_podcasts_lite.js && npm run build && firebase deploy --only hosting",
+    "deploy:fast": "npm run build && firebase deploy --only hosting",
     "deploy:all": "npm run build && firebase deploy && node ../../scripts/set_function_iam.js"
   },
   "dependencies": {

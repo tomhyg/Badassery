@@ -147,6 +147,19 @@ async function scrapeSpotifyRating(spotifyUrl, existingBrowser = null) {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
+    // Block heavy resources — Spotify loads audio previews and artwork on 'load'
+    // which can consume 40-100MB per page and cause OOM across concurrent feeds.
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      // Block audio previews and artwork (the main OOM culprits on 'load').
+      // Stylesheets must be allowed — Spotify's SPA won't render without them.
+      if (['image', 'media', 'font'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
     // Use 'load' instead of 'networkidle2' — Spotify keeps background requests open
     // indefinitely which causes networkidle2 to timeout.
     await page.goto(spotifyUrl, { waitUntil: 'load', timeout: 30_000 });

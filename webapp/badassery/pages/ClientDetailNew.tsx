@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Client, getClientDisplayData, WishlistItem } from '../types';
-import { ArrowLeft, Edit2, Mail, Phone, Linkedin, Calendar, User, Target, Sparkles, MessageSquare, TrendingUp, Globe, Heart, AlertCircle, RefreshCw, Wand2, Check, X, Radio, ExternalLink, CheckCircle, XCircle, Info, Zap, Plus, Trash2, Send, Star, Copy, Camera, Clock, Search, ChevronDown } from 'lucide-react';
-import { getClientById, updateClient } from '../services/clientService';
+import { ArrowLeft, Edit2, Mail, Sparkles, Heart, AlertCircle, RefreshCw, Wand2, Check, X, Radio, ExternalLink, CheckCircle, XCircle, Info, Trash2, Send, Search, User, Globe, Target, MessageSquare, TrendingUp, ChevronDown } from 'lucide-react';
+import { getClientById, updateClient, deleteClient } from '../services/clientService';
 import { enhanceBioWithGemini, generateClientSummary } from '../services/geminiService';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getOutreachByClientId, updateOutreachStatus, updateOutreachWorkflowStatus, updateItunesId, updateHostEmail, OutreachDocument, getBestHostEmail, EmailCandidate } from '../services/outreachService';
@@ -10,6 +10,11 @@ import { AIMatchWithPodcast } from '../types';
 import { getClientWishlist, removeFromWishlist, moveToOutreach, WishlistItem as WishlistItemType } from '../services/wishlistService';
 import { getPodcastByItunesId, PodcastDocument, BADASSERY_TOPICS } from '../services/podcastService';
 import { getAIConfig } from '../services/settingsService';
+import { generateReviewToken } from '../services/reviewService';
+import { ClientSectionCard } from '../components/client-detail/ClientSectionCard';
+import { ClientInfoField } from '../components/client-detail/ClientInfoField';
+import { ClientHeader } from '../components/client-detail/ClientHeader';
+import { ClientMatchingPage } from './ClientMatchingPage';
 
 // Target location options (same as onboarding)
 const TARGET_LOCATIONS = ['U.S.', 'Europe', 'No Preference'];
@@ -20,11 +25,10 @@ interface ClientDetailNewProps {
 }
 
 export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBack }) => {
+  const [showMatchingPage, setShowMatchingPage] = useState(false);
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'goals' | 'brand' | 'podcast' | 'content' | 'aimatches' | 'wishlist' | 'outreach'>('overview');
-
   // AI Matches
   const [aiMatches, setAiMatches] = useState<AIMatchWithPodcast[]>([]);
   const [loadingMatches, setLoadingMatches] = useState(false);
@@ -72,21 +76,55 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
   // Copy notification
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // Review token generation
+  const [generatingReview, setGeneratingReview] = useState(false);
+  const [copiedReviewLink, setCopiedReviewLink] = useState(false);
+
+  // Identity & Contact inline editing
+  const [editingIdentity, setEditingIdentity] = useState(false);
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [assessmentForm, setAssessmentForm] = useState({ onlinePresenceRating: '', channelReach: '', contentFrequency: '', representationType: '', schedulingLink: '' });
+
+  // Collapsible bios (Section 6) — 'final' open by default
+  const [expandedBios, setExpandedBios] = useState<Set<string>>(new Set(['final']));
+
+  // Interview Questions
+  const [interviewQuestions, setInterviewQuestions] = useState<string[]>([]);
+  const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [questionsError, setQuestionsError] = useState<string | null>(null);
+
+  // Bio V1 (legacy)
+  const [bioV1Loading, setBioV1Loading] = useState(false);
+  const [bioV1Error, setBioV1Error] = useState<string | null>(null);
+  const [bioV1Done, setBioV1Done] = useState(false);
+
+  // Phase 1 — Before the Interview
+  const [phase1Loading, setPhase1Loading] = useState(false);
+  const [phase1Error, setPhase1Error] = useState<string | null>(null);
+  const [phase1Done, setPhase1Done] = useState(false);
+  const [phase1Bio, setPhase1Bio] = useState('');
+  const [phase1Questions, setPhase1Questions] = useState<string[]>([]);
+  const [phase1SuggestedTopics, setPhase1SuggestedTopics] = useState<string[]>([]);
+  const [phase1SuggestedTitles, setPhase1SuggestedTitles] = useState<string[]>([]);
+
+  // Phase 2 — After the Interview
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [aiProfileLoading, setAiProfileLoading] = useState(false);
+  const [aiProfileError, setAiProfileError] = useState<string | null>(null);
+  const [aiProfileDone, setAiProfileDone] = useState(false);
+  const [aiProfileBio, setAiProfileBio] = useState('');
+  const [aiProfileTopics, setAiProfileTopics] = useState<string[]>([]);
+  const [aiProfileTitles, setAiProfileTitles] = useState<string[]>([]);
+
   useEffect(() => {
     loadClient();
   }, [clientId]);
 
   useEffect(() => {
-    if (activeTab === 'outreach') {
-      loadOutreach();
-    }
-    if (activeTab === 'aimatches') {
-      loadAIMatches();
-    }
-    if (activeTab === 'wishlist') {
-      loadWishlist();
-    }
-  }, [activeTab, clientId]);
+    loadOutreach();
+    loadWishlist();
+  }, [clientId]);
 
   const loadAIMatches = async () => {
     try {
@@ -144,8 +182,6 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
     try {
       await approveMatch(matchId, 'current_user');
       await loadAIMatches();
-      // Navigate to Outreach tab after approval
-      setActiveTab('outreach');
       await loadOutreach();
     } catch (error) {
       console.error('Error approving match:', error);
@@ -227,6 +263,20 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
     }
   };
 
+  const handleCancelEditStats = () => {
+    setEditingStats(false);
+  };
+
+  const handleDeleteClient = async () => {
+    if (!window.confirm(`Delete ${client?.identity?.firstName ?? 'this client'}? This cannot be undone.`)) return;
+    try {
+      await deleteClient(clientId);
+      onBack();
+    } catch {
+      alert('Failed to delete client. Please try again.');
+    }
+  };
+
   // Copy Badassery Link
   const handleCopyBadasseryLink = () => {
     const link = client?.links?.badasseryProfileUrl;
@@ -234,6 +284,214 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
       navigator.clipboard.writeText(link);
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
+
+  const handleGenerateReviewLink = async () => {
+    if (!client || !clientId) return;
+    setGeneratingReview(true);
+    try {
+      const c = client as any;
+      const clientName = c.contact_name ||
+        (c.identity ? `${c.identity.firstName} ${c.identity.lastName}`.trim() : '') || clientId;
+      const token = await generateReviewToken({
+        id: `manual_${clientId}_${Date.now()}`,
+        client_id: clientId,
+        client_name: clientName,
+        podcast_id: '',
+        podcast_name: '',
+      });
+      const link = `${window.location.origin}/?review=${token}`;
+      navigator.clipboard.writeText(link);
+      setCopiedReviewLink(true);
+      setTimeout(() => setCopiedReviewLink(false), 3000);
+    } catch (e) {
+      console.error('Error generating review token:', e);
+    } finally {
+      setGeneratingReview(false);
+    }
+  };
+
+  const handleSaveIdentityFields = async () => {
+    if (!client) return;
+    setSavingIdentity(true);
+    try {
+      await updateClient(clientId, {
+        'currentStatus.onlinePresenceRating': assessmentForm.onlinePresenceRating || undefined,
+        'currentStatus.channelReach': assessmentForm.channelReach || undefined,
+        'currentStatus.contentFrequency': assessmentForm.contentFrequency || undefined,
+        'identity.representationType': assessmentForm.representationType || undefined,
+        'links.schedulingLink': assessmentForm.schedulingLink || undefined,
+      } as any);
+      setClient(prev => {
+        if (!prev) return prev;
+        const p = prev as any;
+        return {
+          ...prev,
+          currentStatus: { ...p.currentStatus, onlinePresenceRating: assessmentForm.onlinePresenceRating, channelReach: assessmentForm.channelReach, contentFrequency: assessmentForm.contentFrequency },
+          identity: { ...p.identity, representationType: assessmentForm.representationType },
+          links: { ...p.links, schedulingLink: assessmentForm.schedulingLink },
+        } as any;
+      });
+      setEditingIdentity(false);
+    } catch (e) {
+      console.error('Error saving identity fields:', e);
+    } finally {
+      setSavingIdentity(false);
+    }
+  };
+
+  // Interview Questions via Gemini
+  const handleGenerateInterviewQuestions = async () => {
+    if (!client) return;
+    try {
+      setLoadingQuestions(true);
+      setQuestionsError(null);
+      const { getAIConfig } = await import('../services/aiConfigService');
+      const config = getAIConfig();
+      const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent`;
+
+      const ctx = [
+        `Name: ${client.identity?.firstName || ''} ${client.identity?.lastName || ''}`,
+        `Title: ${client.identity?.jobTitle || ''}`,
+        `Company: ${client.identity?.company || ''}`,
+        `Goals: ${client.goals?.professionalGoals || ''}`,
+        `Mission: ${client.goals?.missionDescription || ''}`,
+        `Why now: ${client.goals?.whyNow || ''}`,
+        `Top 3 goals: ${client.goals?.top3Goals || ''}`,
+        `Work description: ${client.goals?.workDescription || ''}`,
+        `Success definition: ${client.goals?.successDefinition || ''}`,
+        `Challenges: ${client.goals?.challenges || ''}`,
+        `Target audience: ${client.podcast?.audienceDescription || ''}`,
+        `Key questions to answer on podcasts: ${client.podcast?.keyQuestions || ''}`,
+        `Unasked question: ${client.podcast?.unaskedQuestion || ''}`,
+        `Listener takeaways: ${client.podcast?.listenerTakeaways || ''}`,
+        `Products/services: ${client.podcast?.productsServices || ''}`,
+        `Passion topics: ${client.brandPersonality?.passionTopics || ''}`,
+        `Three adjectives: ${client.brandPersonality?.threeAdjectives || ''}`,
+        `Common misunderstandings: ${client.brandPersonality?.commonMisunderstandings || ''}`,
+        `Speaking topics: ${(client.content?.speakingTopicsArray || []).join(', ')}`,
+        `Badassery Recipe / pivot moment: ${(client.identity as any)?.badasseryRecipe || ''}`,
+        `Tagline: ${(client.identity as any)?.tagline || ''}`,
+        `Bio: ${client.content?.bioOriginal || ''}`,
+      ].filter(l => !l.endsWith(': ')).join('\n');
+
+      const prompt = `You are a podcast interview coach preparing a 1-hour deep-dive session with a speaker.
+
+Based on this client profile, generate exactly 15 sharp, open-ended interview questions organized in 5 categories of 3 questions each:
+1. Origine & identité (who they are, their journey, their "why")
+2. Le moment pivot (the turning point, the Badassery Recipe, defining decision)
+3. Travail actuel (what they do today, methodology, concrete results)
+4. Audience & objectifs podcast (who they want to reach, what message to spread)
+5. Stories & contenu (anecdotes, controversies, things rarely said on podcasts)
+
+Client profile:
+${ctx}
+
+Return ONLY a JSON array of 15 strings, one question per item, in order. No category labels in the strings. No markdown. Example format:
+["Question 1", "Question 2", ..., "Question 15"]`;
+
+      const resp = await fetch(`${GEMINI_API_URL}?key=${config.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.8, maxOutputTokens: 2048 }
+        })
+      });
+      if (!resp.ok) throw new Error(`Gemini error: ${resp.status}`);
+      const data = await resp.json();
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const match = raw.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error('Could not parse questions from response');
+      const questions: string[] = JSON.parse(match[0]);
+      setInterviewQuestions(questions);
+    } catch (err) {
+      setQuestionsError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoadingQuestions(false);
+    }
+  };
+
+  // Bio V1 via Gemini
+  const handleGenerateBioV1 = async () => {
+    if (!client) return;
+    try {
+      setBioV1Loading(true);
+      setBioV1Error(null);
+      setBioV1Done(false);
+      const { getAIConfig } = await import('../services/aiConfigService');
+      const config = getAIConfig();
+      const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent`;
+
+      const firstName = client.identity?.firstName || '';
+      const lastName = client.identity?.lastName || '';
+      const title = client.identity?.jobTitle || '';
+      const company = client.identity?.company || '';
+      const recipe = (client.identity as any)?.badasseryRecipe || '';
+      const tagline = (client.identity as any)?.tagline || '';
+      const goals = client.goals?.professionalGoals || '';
+      const mission = client.goals?.missionDescription || '';
+      const work = client.goals?.workDescription || '';
+      const audience = client.podcast?.audienceDescription || '';
+      const takeaways = client.podcast?.listenerTakeaways || '';
+      const topics = (client.content?.speakingTopicsArray || []).join(', ');
+      const adjectives = client.brandPersonality?.threeAdjectives || '';
+      const passions = client.brandPersonality?.passionTopics || '';
+      const products = client.podcast?.productsServices || '';
+
+      const prompt = `You are a professional speaker bio writer for a podcast outreach agency called Badassery PR.
+
+Write a compelling speaker bio for ${firstName} ${lastName} based on the information below. Requirements:
+- Third person ("${firstName} is...")
+- 200–350 words
+- Lead with their impact or unique positioning (NOT their job title)
+- Weave in their pivot story or "why" if available (Badassery Recipe)
+- Mention what they help their audience achieve
+- End with a punchy closing line that makes a podcast host want to book them
+- Professional but human, no corporate jargon, conversational energy
+
+Client data:
+Name: ${firstName} ${lastName}
+Title: ${title}
+Company: ${company}
+Tagline: ${tagline}
+Mission: ${mission}
+Work: ${work}
+Goals: ${goals}
+Products/Services: ${products}
+Target audience: ${audience}
+Listener takeaways: ${takeaways}
+Speaking topics: ${topics}
+Brand adjectives: ${adjectives}
+Passion topics: ${passions}
+Pivot story / Badassery Recipe: ${recipe}
+
+Return ONLY the bio text, no title, no label, no markdown.`;
+
+      const resp = await fetch(`${GEMINI_API_URL}?key=${config.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.85, maxOutputTokens: 1024 }
+        })
+      });
+      if (!resp.ok) throw new Error(`Gemini error: ${resp.status}`);
+      const data = await resp.json();
+      const bioText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+      if (!bioText) throw new Error('Empty response from Gemini');
+
+      // Save to Firestore
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('../services/firebase');
+      await updateDoc(doc(db, 'clients', clientId), { 'content.bioV1': bioText });
+      setClient({ ...client, content: { ...client.content!, bioV1: bioText } });
+      setBioV1Done(true);
+    } catch (err) {
+      setBioV1Error(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setBioV1Loading(false);
     }
   };
 
@@ -281,10 +539,7 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
     try {
       await moveToOutreach(wishlistId);
       await loadWishlist();
-      // Also refresh outreach tab if needed
-      if (activeTab === 'outreach') {
-        await loadOutreach();
-      }
+      await loadOutreach();
     } catch (error) {
       console.error('Error moving to outreach:', error);
       alert('Failed to create outreach. Please try again.');
@@ -296,6 +551,19 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
       setLoading(true);
       const data = await getClientById(clientId);
       setClient(data);
+      if ((data as any)?.interviewQuestions?.length) {
+        setInterviewQuestions((data as any).interviewQuestions);
+      }
+      if ((data as any)?.content?.suggestedTopics?.length) {
+        setPhase1SuggestedTopics((data as any).content.suggestedTopics);
+      }
+      setAssessmentForm({
+        onlinePresenceRating: (data as any)?.currentStatus?.onlinePresenceRating || '',
+        channelReach: (data as any)?.currentStatus?.channelReach || '',
+        contentFrequency: (data as any)?.currentStatus?.contentFrequency || '',
+        representationType: (data as any)?.identity?.representationType || '',
+        schedulingLink: (data as any)?.links?.schedulingLink || '',
+      });
     } catch (error) {
       console.error('Error loading client:', error);
     } finally {
@@ -312,6 +580,378 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
       console.error('Error loading outreach:', error);
     } finally {
       setLoadingOutreach(false);
+    }
+  };
+
+  // ── PHASE 1 — Generate BioV1 + Interview Prep ──
+  const handlePhase1Generate = async () => {
+    if (!client) return;
+    try {
+      setPhase1Loading(true);
+      setPhase1Error(null);
+      const { getAIConfig } = await import('../services/aiConfigService');
+      const config = getAIConfig();
+      const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent`;
+      const c = client as any;
+      const existingTopicTitles = (c.content?.speakingTopicTitles || []).join(' / ');
+      const existingTopicsArray = (client.content?.speakingTopicsArray || []);
+      const existingTopics = existingTopicsArray.join(', ');
+      const top3Goals = Array.isArray(client.goals?.top3Goals)
+        ? (client.goals!.top3Goals as unknown as string[]).join(', ')
+        : (client.goals?.top3Goals || '');
+      const secondaryCategories = (c.matching?.secondaryCategories || []).join(', ');
+      const books = (c.books || []).map((b: any) => b.title).filter(Boolean).join(', ');
+      const dreamPodcasts = (client.podcast?.dreamPodcastList || []).join(', ');
+      const ctx = [
+        `Name: ${client.identity?.firstName || ''} ${client.identity?.lastName || ''}`,
+        `Title: ${client.identity?.jobTitle || ''}`,
+        `Company: ${client.identity?.company || ''}`,
+        `Representation Type: ${client.identity?.representationType || ''}`,
+        `Tagline: ${c.identity?.tagline || ''}`,
+        `Badassery Recipe: ${c.identity?.badasseryRecipe || ''}`,
+        `Mission: ${client.goals?.mission || ''}`,
+        `Why now: ${c.selfAssessment?.whyNow || ''}`,
+        `Top 3 goals: ${top3Goals}`,
+        `Professional goals: ${client.goals?.professionalGoals || ''}`,
+        `Primary Category: ${c.matching?.primaryCategory || ''}`,
+        `Secondary Categories: ${secondaryCategories}`,
+        `Podcast Experience: ${c.selfAssessment?.podcastExperience || ''}`,
+        `Target audience: ${client.podcast?.targetAudience || ''}`,
+        `Products/services: ${client.podcast?.productsServices || ''}`,
+        `Dream Podcasts: ${dreamPodcasts}`,
+        `Listener takeaways: ${client.content?.listenerTakeaways || ''}`,
+        `Host questions: ${client.content?.hostQuestions || ''}`,
+        `Unusual question: ${client.content?.unusualQuestion || ''}`,
+        `Is Author: ${c.isAuthor === true ? 'Yes' : c.isAuthor === false ? 'No' : ''}`,
+        `Books: ${books}`,
+        `Speaking topic titles: ${existingTopicTitles}`,
+        `Speaking topics (keywords): ${existingTopics}`,
+        `Bio original: ${client.content?.bioOriginal || ''}`,
+        `Topics to Avoid (legal): ${client.preferences?.legalRestrictions || ''}`,
+        `Anything Else: ${client.preferences?.anythingElse || ''}`,
+      ].filter(l => !l.endsWith(': ')).join('\n');
+
+      // Exact taxonomy from Firestore podcast database (70,972 podcasts scanned)
+      const PODCAST_CATEGORIES = [
+        'Business','Health & Wellness','Personal Development','Finance & Investing',
+        'Technology','Entrepreneurship','Leadership','Career & Work','Marketing & Sales',
+        'Relationships','Psychology','Education','Science','Parenting & Family',
+        'Real Estate','Travel & Adventure','Environment','Design & Creativity','Philosophy',
+        'True Crime','History','Arts & Culture','Religion & Spirituality','Sports & Fitness',
+        'Comedy','Music','Film & TV','News & Media','Gaming',
+      ];
+      const PODCAST_TOPICS = [
+        'entrepreneurship','personal growth','leadership','business strategy','mental health',
+        'resilience','mindset','career development','personal development','self-improvement',
+        'professional development','coaching','personal finance','investment strategies',
+        'wellness','creativity','innovation','relationships','parenting','nutrition','fitness',
+        'sustainability','education','technology','ai','social issues','philosophy',
+        'storytelling','healing','community','journalism','industry trends','creative process',
+        'literature','activism','diversity and inclusion','remote work','productivity',
+        'work-life balance','emotional intelligence','negotiation','public speaking',
+        'branding','content creation','social media','sales','management',
+        'organizational culture','team building','customer experience','future of work',
+        'wealth building','financial freedom','real estate investing','side hustle',
+        'startup','venture capital','business transformation','digital marketing',
+      ];
+
+      const prompt = `You are a podcast outreach expert at Badassery PR. Your goal is to create the best possible speaker profile for podcast bookings.
+
+Based on the client profile below, generate exactly 3 outputs:
+
+---
+OUTPUT 1 — BIO V1
+Write a compelling third-person speaker bio of 220-320 words structured in 3 clear paragraphs:
+
+**Paragraph 1 — Hook & Identity (3-4 sentences):**
+Open with a bold, memorable hook about who they are and the transformation they create — NOT their job title. Immediately establish their unique angle or pivot story. End this paragraph with their tagline or a punchy positioning statement.
+
+**Paragraph 2 — Work & Mission (3-4 sentences):**
+Describe what they do concretely: their methodology, their company/platform, who they serve and how. Weave in the "why now" and their mission. Mention a concrete result or proof point if available.
+
+**Paragraph 3 — Credibility & CTA (2-3 sentences):**
+One sentence on their background, credentials, or notable achievement. One sentence on why podcast audiences love them (what listeners walk away with). End with a punchy, forward-looking closing line.
+
+Rules:
+- Third person, active verbs, no buzzword soup, no "passionate about", no generic openers like "Meet [Name]".
+- If "Is Author" = Yes → mention the book(s) by name in paragraph 2 or 3 as a credibility signal.
+- If "Topics to Avoid (legal)" is filled → do NOT reference those subjects anywhere in the bio.
+
+---
+OUTPUT 2 — INTERVIEW QUESTIONS
+Write exactly 15 open-ended questions for a 60-minute discovery call:
+- Q1 MUST be exactly: "Tell me where you grew up and what that was like?"
+- Q15 MUST be exactly: "Is there something fun or personal about yourself that you haven't told me yet?"
+- Q2–Q14: Craft specific questions based on THIS client's actual story, pivot, methodology, mission, and audience. Cover: origin story, key turning point, core method/framework, biggest client transformation, counterintuitive belief, what they wish people knew, their own challenges, the future they're building toward.
+- If "Is Author" = Yes → include at least 1 question specifically about their book.
+- If "Podcast Experience" is low → include a question about what made them decide to start doing podcasts now.
+- If "Topics to Avoid (legal)" is filled → do NOT ask questions on those subjects.
+- Make questions conversational and specific — avoid generic interview clichés.
+
+---
+OUTPUT 3 — SUGGESTED TOPICS
+Generate exactly 5 topic keywords for this speaker, DIFFERENT from their existing topics: [${existingTopics || existingTopicTitles || 'none'}]
+
+Use "Primary Category" and "Secondary Categories" from the client profile to orient your choices — the suggested topics should logically fit within or adjacent to these categories.
+If "Dream Podcasts" is filled, use it to infer the type of audience and topics that would resonate.
+If "Topics to Avoid (legal)" is filled → exclude those subjects entirely.
+
+CRITICAL RULE: Every topic MUST be chosen EXACTLY from one of these two lists — do not invent new values:
+
+CATEGORIES (pick 1 or 2 max):
+${PODCAST_CATEGORIES.join(', ')}
+
+TOPICS (pick 3 or 4):
+${PODCAST_TOPICS.join(', ')}
+
+Pick the values that best match this speaker's profile. Return them as-is, exactly as written above (same capitalization, same spelling).
+
+---
+OUTPUT 4 — SPEAKING TOPIC TITLES
+Generate exactly 3 compelling, host-ready speaking topic titles for this speaker.
+
+Context — existing topic titles already filled in by the client:
+${existingTopicTitles || 'none yet'}
+
+Rules:
+- These must be DIFFERENT from the existing titles above
+- Format: punchy, specific, benefit-driven title a podcast host would actually use to pitch an episode
+- 5–12 words max per title
+- Should make the host think "my audience needs to hear this"
+- Examples of good format: "Why Most High Achievers Are Building the Wrong Career", "The Hidden Cost of Hustle Culture (And What to Do Instead)"
+- No generic titles like "Leadership Tips" or "How to Be Successful"
+- If "Is Author" = Yes → at least 1 title can reference the book's core idea (not the title literally)
+- If "Topics to Avoid (legal)" is filled → exclude those subjects
+
+---
+CLIENT PROFILE:
+${ctx}
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{"bio":"...","interviewQuestions":["Q1",...,"Q15"],"suggestedTopics":["t1","t2","t3","t4","t5"],"suggestedTitles":["title1","title2","title3"]}`;
+
+      const resp = await fetch(`${GEMINI_URL}?key=${config.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 4096 } })
+      });
+      if (!resp.ok) throw new Error(`Gemini error: ${resp.status}`);
+      const data = await resp.json();
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Could not parse JSON from response');
+      const result = JSON.parse(match[0]);
+      setPhase1Bio(result.bio || '');
+      setPhase1Questions(result.interviewQuestions || []);
+      setPhase1SuggestedTopics(result.suggestedTopics || []);
+      setPhase1SuggestedTitles(result.suggestedTitles || []);
+      setPhase1Done(true);
+    } catch (err) {
+      setPhase1Error(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setPhase1Loading(false);
+    }
+  };
+
+  const handlePhase1Save = async () => {
+    if (!client || !phase1Done) return;
+    try {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('../services/firebase');
+      await updateDoc(doc(db, 'clients', clientId), {
+        'content.bioV1': phase1Bio,
+        'interviewQuestions': phase1Questions,
+        'content.suggestedTopics': phase1SuggestedTopics,
+        ...(phase1SuggestedTitles.length > 0 && { 'content.aiTopicTitles': phase1SuggestedTitles }),
+      });
+      setClient(prev => ({
+        ...prev!,
+        content: {
+          ...prev!.content!,
+          bioV1: phase1Bio,
+          ...(phase1SuggestedTitles.length > 0 && { aiTopicTitles: phase1SuggestedTitles } as any),
+        },
+      }));
+      setInterviewQuestions(phase1Questions);
+      setPhase1Done(false);
+      setPhase1Bio('');
+      setPhase1Questions([]);
+      setPhase1SuggestedTitles([]);
+    } catch (err) {
+      alert(`Save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  // ── PHASE 2 — Generate Final Bio from PDF transcript ──
+  const handleAiProfileGenerate = async () => {
+    if (!client || !pdfFile) return;
+    try {
+      setAiProfileLoading(true);
+      setAiProfileError(null);
+      const { getAIConfig } = await import('../services/aiConfigService');
+      const config = getAIConfig();
+      const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent`;
+      const arrayBuffer = await pdfFile.arrayBuffer();
+      const base64Chunks: string[] = [];
+      const bytes = new Uint8Array(arrayBuffer);
+      for (let i = 0; i < bytes.length; i += 8192) {
+        base64Chunks.push(String.fromCharCode(...bytes.slice(i, i + 8192)));
+      }
+      const base64 = btoa(base64Chunks.join(''));
+      const c = client as any;
+      const existingTopics = (client.content?.speakingTopicsArray || []).join(', ');
+      const top3Goals = Array.isArray(client.goals?.top3Goals)
+        ? (client.goals!.top3Goals as unknown as string[]).join(', ')
+        : (client.goals?.top3Goals || '');
+      const secondaryCategories = (c.matching?.secondaryCategories || []).join(', ');
+      const books = (c.books || []).map((b: any) => b.title).filter(Boolean).join(', ');
+      const dreamPodcasts = (client.podcast?.dreamPodcastList || []).join(', ');
+      const interviewQuestions = (c.interviewQuestions || []).join('\n');
+      const phase1SuggestedTopicsCtx = (c.content?.suggestedTopics || []).join(', ');
+      const phase1TopicTitles = (c.content?.aiTopicTitles || []).join(' / ');
+      const existingTopicTitles = (c.content?.speakingTopicTitles || []).join(' / ');
+
+      const ctx = [
+        `Name: ${client.identity?.firstName || ''} ${client.identity?.lastName || ''}`,
+        `Title: ${client.identity?.jobTitle || ''}`,
+        `Company: ${client.identity?.company || ''}`,
+        `Representation Type: ${client.identity?.representationType || ''}`,
+        `Tagline: ${c.identity?.tagline || ''}`,
+        `Badassery Recipe: ${c.identity?.badasseryRecipe || ''}`,
+        `Mission: ${client.goals?.mission || ''}`,
+        `Why now: ${c.selfAssessment?.whyNow || ''}`,
+        `Top 3 goals: ${top3Goals}`,
+        `Professional goals: ${client.goals?.professionalGoals || ''}`,
+        `Primary Category: ${c.matching?.primaryCategory || ''}`,
+        `Secondary Categories: ${secondaryCategories}`,
+        `Podcast Experience: ${c.selfAssessment?.podcastExperience || ''}`,
+        `Target audience: ${client.podcast?.targetAudience || ''}`,
+        `Products/services: ${client.podcast?.productsServices || ''}`,
+        `Dream Podcasts: ${dreamPodcasts}`,
+        `Listener takeaways: ${client.content?.listenerTakeaways || ''}`,
+        `Host questions: ${client.content?.hostQuestions || ''}`,
+        `Unusual question: ${client.content?.unusualQuestion || ''}`,
+        `Is Author: ${c.isAuthor === true ? 'Yes' : c.isAuthor === false ? 'No' : ''}`,
+        `Books: ${books}`,
+        `Speaking topic titles (client): ${existingTopicTitles}`,
+        `Existing speaking topics: ${existingTopics}`,
+        `Bio original (client-written): ${client.content?.bioOriginal || ''}`,
+        `Bio V1 (Phase 1 AI): ${client.content?.bioV1 || ''}`,
+        `Phase 1 Suggested Topics: ${phase1SuggestedTopicsCtx}`,
+        `Phase 1 AI Topic Titles: ${phase1TopicTitles}`,
+        `Topics to Avoid (legal): ${client.preferences?.legalRestrictions || ''}`,
+        `Anything Else: ${client.preferences?.anythingElse || ''}`,
+      ].filter(l => !l.endsWith(': ')).join('\n');
+
+      const interviewQuestionsSection = interviewQuestions
+        ? `\nInterview Questions Used:\n${interviewQuestions}\n`
+        : '';
+
+      const prompt = `You are a podcast outreach expert at Badassery PR. Your job is to write the final speaker profile using the interview transcript as the primary source.
+${interviewQuestionsSection ? `\nThe questions below were asked during the recorded interview. Find the speaker's actual answers in the transcript — use their real stories, words, anecdotes, and examples.\n` : ''}
+Generate exactly 3 outputs:
+
+---
+OUTPUT 1 — FINAL BIO (250-350 words)
+The transcript is your primary source. Extract the best story, moment, or insight the speaker shared and build the bio around it.
+
+Structure — 3 paragraphs:
+Paragraph 1 — Hook: Open with the most compelling story or moment from the transcript. Make it human and specific. Draw the reader in immediately.
+Paragraph 2 — Work & Method: What they do, who they serve, how they do it — enriched with real details from the transcript. Weave in their mission and "why now".
+Paragraph 3 — Credibility & Close: One line on background or achievement. One line on what listeners walk away with. End with a punchy, forward-looking line.
+
+Writing rules — follow every single one:
+- Third person, conversational, warm, story-driven
+- Personality must come through strongly
+- No dashes (makes it sound like AI)
+- No corporate or TED talk language
+- No movie trailer language ("journey", "transform", "empower")
+- No long clunky sentences
+- No buzzwords ("passionate", "leverage", "impactful", "thought leader")
+- If "Is Author" = Yes → mention the book naturally in paragraph 2 or 3
+- If "Topics to Avoid (legal)" → do not reference those subjects anywhere
+
+---
+OUTPUT 2 — 5 TOPICS KEYWORDS
+Based on what was actually discussed in the transcript — not just the profile.
+Use "Phase 1 Suggested Topics" as a starting point: confirm, refine or replace based on what emerged in the interview.
+Rules:
+- Freeform lowercase, 1-3 words max
+- Natural podcast vocabulary
+- Different from "Existing speaking topics" in the profile
+- If "Topics to Avoid (legal)" → exclude those subjects
+
+---
+OUTPUT 3 — 3 SPEAKING TOPIC TITLES
+Punchy, bookable episode titles a host would actually pitch to their audience.
+Based on real stories and moments from the transcript — not generic.
+Different from "Speaking topic titles (client)" in the profile.
+Format styles to use: "From X to Y" / "The [Adjective] [Noun]" / "Why [Surprising Statement]" / "The [Number] [Thing] No One Tells You About [Topic]"
+- If "Is Author" = Yes → at least 1 title can reference the book's core idea (not literally the title)
+- If "Topics to Avoid (legal)" → exclude those subjects
+
+---
+CLIENT PROFILE:
+${ctx}
+${interviewQuestionsSection}
+Return ONLY valid JSON (no markdown, no code blocks):
+{"bio":"...","topics":["t1","t2","t3","t4","t5"],"titles":["title1","title2","title3"]}`;
+
+      const resp = await fetch(`${GEMINI_URL}?key=${config.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'application/pdf', data: base64 } }] }],
+          generationConfig: { temperature: 0.5, maxOutputTokens: 3000 }
+        })
+      });
+      if (!resp.ok) throw new Error(`Gemini error: ${resp.status}`);
+      const data = await resp.json();
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('Could not parse JSON from response');
+      const result = JSON.parse(match[0]);
+      setAiProfileBio(result.bio || '');
+      setAiProfileTopics(result.topics || []);
+      setAiProfileTitles(result.titles || []);
+      setAiProfileDone(true);
+    } catch (err) {
+      setAiProfileError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setAiProfileLoading(false);
+    }
+  };
+
+  const handleAiProfileSave = async () => {
+    if (!client || !aiProfileDone) return;
+    const hasExistingTopics = (client.content?.speakingTopicsArray || []).length > 0;
+    if (hasExistingTopics) {
+      const ok = window.confirm('This will replace the existing speaking topics. Continue?');
+      if (!ok) return;
+    }
+    try {
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const { db } = await import('../services/firebase');
+      await updateDoc(doc(db, 'clients', clientId), {
+        'content.bioFinal': aiProfileBio,
+        'content.speakingTopicsArray': aiProfileTopics,
+        ...(aiProfileTitles.length > 0 && { 'content.speakingTopicTitles': aiProfileTitles }),
+      });
+      setClient(prev => ({
+        ...prev!,
+        content: {
+          ...prev!.content!,
+          speakingTopicsArray: aiProfileTopics,
+          ...(aiProfileTitles.length > 0 && { speakingTopicTitles: aiProfileTitles } as any),
+        },
+      }));
+      setAiProfileDone(false);
+      setAiProfileBio('');
+      setAiProfileTopics([]);
+      setAiProfileTitles([]);
+      setPdfFile(null);
+    } catch (err) {
+      alert(`Save failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -466,6 +1106,10 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
     );
   }
 
+  if (showMatchingPage) {
+    return <ClientMatchingPage clientId={clientId} onBack={() => setShowMatchingPage(false)} />;
+  }
+
   if (!client) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -483,7 +1127,7 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
   const display = getClientDisplayData(client);
 
   return (
-    <div className="flex flex-col h-full space-y-6 pb-8">
+    <div className="flex flex-col space-y-6 pb-8">
       {/* Header */}
       <div className="flex items-start justify-between">
         <button onClick={onBack} className="text-slate-500 hover:text-slate-900 flex items-center gap-2 text-sm font-medium">
@@ -491,1078 +1135,1014 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
         </button>
         <div className="flex gap-2">
           <button
+            onClick={() => setShowMatchingPage(true)}
+            className="px-3 py-1.5 text-xs font-semibold text-white rounded flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+            style={{ background: 'linear-gradient(90deg, #e8463a, #f97316)' }}
+            title="Badassery Matching"
+          >
+            🎯 Matching
+          </button>
+          <button
             onClick={handleEdit}
             className="px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded hover:bg-slate-50 flex items-center gap-1"
           >
             <Edit2 size={12} /> Edit
           </button>
+          <button
+            onClick={handleDeleteClient}
+            className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded hover:bg-red-50 flex items-center gap-1"
+          >
+            <Trash2 size={12} /> Delete
+          </button>
         </div>
       </div>
 
-      {/* Client Header Card */}
-      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex items-start gap-6">
-          {/* Photo with upload */}
-          <div className="relative group">
-            <img
-              src={display.logo_url}
-              alt={display.company_name}
-              className="w-20 h-20 rounded-full border-2 border-slate-200 object-cover"
-            />
-            <input
-              type="file"
-              ref={photoInputRef}
-              accept="image/*"
-              onChange={handlePhotoUpload}
-              className="hidden"
-            />
-            <button
-              onClick={() => photoInputRef.current?.click()}
-              disabled={uploadingPhoto}
-              className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
-            >
-              {uploadingPhoto ? (
-                <RefreshCw size={20} className="text-white animate-spin" />
-              ) : (
-                <Camera size={20} className="text-white" />
+      {/* ── NEW HEADER ── */}
+      <ClientHeader
+        client={client}
+        display={display}
+        clientId={clientId}
+        photoInputRef={photoInputRef}
+        uploadingHeadshot={uploadingPhoto}
+        onHeadshotUpload={handlePhotoUpload}
+        showStatusMenu={showStatusMenu}
+        setShowStatusMenu={setShowStatusMenu}
+        updating={updating}
+        onStatusChange={handleStatusChange}
+        editingStats={editingStats}
+        statsForm={statsForm}
+        setStatsForm={setStatsForm}
+        onStartEditStats={handleStartEditStats}
+        onSaveStats={handleSaveStats}
+        onCancelEditStats={handleCancelEditStats}
+        copiedLink={copiedLink}
+        onCopyLink={handleCopyBadasseryLink}
+        generatingReview={generatingReview}
+        copiedReviewLink={copiedReviewLink}
+        onGenerateReviewLink={handleGenerateReviewLink}
+      />
+
+      {/* ── SECTION 1 — MATCHING PROFILE ── */}
+      <ClientSectionCard title="🎯 Matching Profile" accent="indigo">
+        {(() => {
+          const c = client as any;
+          const topics: string[] = client.content?.speakingTopicsArray || [];
+          return (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                <ClientInfoField label="Primary Category"     value={c.matching?.primaryCategory} />
+                <ClientInfoField label="Secondary Categories" value={(c.matching?.secondaryCategories || []).join(', ')} />
+                <ClientInfoField label="Podcast Experience"   value={c.selfAssessment?.podcastExperience} />
+                <ClientInfoField label="Author?"              value={c.isAuthor} />
+              </div>
+              {topics.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Speaking Topics (tags)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {topics.map(t => (
+                      <span key={t} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full text-sm font-medium">{t}</span>
+                    ))}
+                  </div>
+                </div>
               )}
+            </div>
+          );
+        })()}
+      </ClientSectionCard>
+
+      {/* ── SECTION 2 — IDENTITY & CONTACT ── */}
+      <ClientSectionCard title="👤 Identity & Contact" accent="default">
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <ClientInfoField label="Email"        value={display.email} />
+            <ClientInfoField label="Phone"        value={display.phone} />
+            <ClientInfoField label="Job Title"    value={client.identity?.jobTitle} />
+            <ClientInfoField label="Company"      value={display.company_name} />
+            <ClientInfoField label="Company Size" value={client.identity?.companySize} />
+            <ClientInfoField label="LinkedIn"     value={client.links?.linkedinAndSocial} isLink />
+
+            {/* Editable fields */}
+            {(['Representation Type', 'Scheduling Link', 'Online Presence', 'Content Frequency', 'Channel Reach'] as const).map(label => {
+              const fieldKey = { 'Representation Type': 'representationType', 'Scheduling Link': 'schedulingLink', 'Online Presence': 'onlinePresenceRating', 'Content Frequency': 'contentFrequency', 'Channel Reach': 'channelReach' }[label] as keyof typeof assessmentForm;
+              const isDropdown = label === 'Online Presence' || label === 'Content Frequency' || label === 'Representation Type';
+              const options: Record<string, string[]> = {
+                'Online Presence': ['Poor', 'Fair', 'Average', 'Good', 'Very Good', 'Excellent'],
+                'Content Frequency': ['Daily', 'Several times a week', 'Weekly', 'Monthly', 'Rarely / Never'],
+                'Representation Type': ['Independent / Solo', 'Represented by an agent', 'Part of a company / team', 'Other'],
+              };
+              return (
+                <div key={label}>
+                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">{label}</p>
+                  {editingIdentity ? (
+                    isDropdown ? (
+                      <select
+                        value={assessmentForm[fieldKey]}
+                        onChange={e => setAssessmentForm(f => ({ ...f, [fieldKey]: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                      >
+                        <option value="">— Select —</option>
+                        {options[label].map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={assessmentForm[fieldKey]}
+                        onChange={e => setAssessmentForm(f => ({ ...f, [fieldKey]: e.target.value }))}
+                        placeholder={label === 'Channel Reach' ? 'e.g. 5K LinkedIn followers' : ''}
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                      />
+                    )
+                  ) : (
+                    <p className="text-sm text-slate-900">{assessmentForm[fieldKey] || <span className="text-slate-300 italic">—</span>}</p>
+                  )}
+                </div>
+              );
+            })}
+
+            <ClientInfoField label="Client Since" value={client.metadata?.startDateUtc ? new Date(client.metadata.startDateUtc).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : undefined} />
+          </div>
+
+          {/* Edit controls */}
+          <div className="flex justify-end gap-2">
+            {editingIdentity ? (
+              <>
+                <button onClick={handleSaveIdentityFields} disabled={savingIdentity} className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50">
+                  <Check size={12} /> {savingIdentity ? 'Saving…' : 'Save'}
+                </button>
+                <button onClick={() => setEditingIdentity(false)} className="text-xs px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50">Cancel</button>
+              </>
+            ) : (
+              <button onClick={() => setEditingIdentity(true)} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600">
+                <Edit2 size={12} /> Edit
+              </button>
+            )}
+          </div>
+
+          {(client.currentStatus?.platformsUsed || []).length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Platforms</p>
+              <div className="flex flex-wrap gap-2">
+                {client.currentStatus!.platformsUsed!.map(p => (
+                  <span key={p} className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-full text-sm">{p}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </ClientSectionCard>
+
+      {/* ── SECTION 3 — STORY & GOALS ── */}
+      <ClientSectionCard title="✨ Story & Goals" accent="rose">
+        {(() => {
+          const c = client as any;
+          const recipe = c.identity?.badasseryRecipe;
+          const mission = client.goals?.missionDescription;
+          const whyNow = client.goals?.whyNow;
+          const top3Raw = client.goals?.top3Goals;
+          const top3Items = Array.isArray(top3Raw)
+            ? top3Raw.filter(Boolean)
+            : top3Raw && typeof top3Raw === 'string'
+              ? top3Raw.split(/[\n,;]+/).map((s: string) => s.trim()).filter(Boolean)
+              : [];
+          return (
+            <div className="space-y-5">
+              {recipe && (
+                <div className="rounded-xl p-4 border border-amber-200" style={{ background: '#fffbeb' }}>
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-2">🔑 Pivot Moment</p>
+                  <p className="text-sm text-slate-800 italic leading-relaxed">{recipe}</p>
+                </div>
+              )}
+              {mission && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Mission</p>
+                  <p className="text-base font-semibold text-slate-900 leading-relaxed">{mission}</p>
+                </div>
+              )}
+              {whyNow && <ClientInfoField label="Why Now" value={whyNow} multiline />}
+              {top3Items.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Top 3 Goals</p>
+                  <div className="flex flex-wrap gap-2">
+                    {top3Items.map((g: string, i: number) => (
+                      <span key={i} className="px-3 py-1.5 rounded-full text-sm font-medium text-white" style={{ background: '#e8463a' }}>{g}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {top3Items.length === 0 && top3Raw && <ClientInfoField label="Top 3 Goals" value={top3Raw} multiline />}
+              <ClientInfoField label="Professional Goals"  value={client.goals?.professionalGoals}  multiline />
+            </div>
+          );
+        })()}
+      </ClientSectionCard>
+
+      {/* ── SECTION 4 — PODCAST PREFERENCES ── */}
+      <ClientSectionCard title="🎙 Podcast Preferences" accent="teal">
+        {(() => {
+          const c = client as any;
+          const locations: string[] = client.podcast?.targetLocations || [];
+          const preferredFormats: string[] = c.matching?.preferredFormats || (c.matching?.preferredFormat ? [c.matching.preferredFormat] : []);
+          const dreamList: string[] = c.podcast?.dreamPodcastList || [];
+          const legalNotes = client.preferences?.legalRestrictions;
+          const additionalNotes = client.preferences?.additionalNotes;
+          return (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                <ClientInfoField label="Target Audience"     value={client.podcast?.targetAudience} multiline />
+                <ClientInfoField label="Products / Services" value={client.podcast?.productsServices}    multiline />
+                <ClientInfoField label="Listener Takeaways"  value={client.content?.listenerTakeaways}   multiline />
+                <ClientInfoField label="Open to In-Person"   value={client.podcast?.openToInPerson} />
+                <ClientInfoField label="Interested in Community" value={client.preferences?.communityInterest} />
+                <ClientInfoField label="OK to Post on Social"    value={client.preferences?.okToPostOnSocial ?? undefined} />
+              </div>
+
+              {preferredFormats.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Preferred Formats</p>
+                  <div className="flex flex-wrap gap-2">
+                    {preferredFormats.map((f: string) => (
+                      <span key={f} className="px-2.5 py-1 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-sm font-medium">{f}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {locations.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Target Locations</p>
+                  <div className="flex flex-wrap gap-2">
+                    {locations.map(loc => (
+                      <span key={loc} className="px-2.5 py-1 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-sm font-medium">{loc}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {dreamList.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Dream Podcast List</p>
+                  <div className="space-y-2">
+                    {dreamList.map((url: string, i: number) => (
+                      <a
+                        key={i}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 p-3 bg-teal-50 border border-teal-200 rounded-xl hover:bg-teal-100 transition-colors group"
+                      >
+                        <span className="text-xl flex-shrink-0">🎙</span>
+                        <span className="flex-1 text-sm text-teal-800 font-medium truncate">{url}</span>
+                        <ExternalLink size={13} className="text-teal-400 group-hover:text-teal-600 flex-shrink-0" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!dreamList.length && client.podcast?.dreamPodcasts && (
+                <ClientInfoField label="Dream Podcasts" value={client.podcast.dreamPodcasts} multiline />
+              )}
+
+              {(legalNotes || additionalNotes) && (
+                <div className="pt-2 border-t border-slate-100 space-y-3">
+                  <ClientInfoField label="Legal Guidelines"  value={legalNotes}      multiline />
+                  <ClientInfoField label="Additional Notes"  value={additionalNotes} multiline />
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </ClientSectionCard>
+
+      {/* ── SECTION 5 — CONTENT ASSETS ── */}
+      <ClientSectionCard title="📚 Content Assets" accent="violet">
+        {(() => {
+          const c = client as any;
+          const bios: { key: string; label: string; badge: string; badgeColor: string; text?: string }[] = [
+            { key: 'final',    label: 'Final Bio',    badge: 'FINAL',    badgeColor: 'bg-green-100 text-green-700',  text: c.content?.bioFinal },
+            { key: 'v1',       label: 'Bio V1',       badge: 'V1',       badgeColor: 'bg-teal-100 text-teal-700',    text: client.content?.bioV1 },
+            { key: 'original', label: 'Original Bio', badge: 'ORIGINAL', badgeColor: 'bg-slate-100 text-slate-600',  text: client.content?.bioOriginal },
+          ].filter(b => b.text);
+
+          const toggleBio = (key: string) => {
+            setExpandedBios(prev => {
+              const next = new Set(prev);
+              next.has(key) ? next.delete(key) : next.add(key);
+              return next;
+            });
+          };
+
+          const topicTitles: string[] = c.content?.speakingTopicTitles || [];
+          const books: { title: string; link: string }[] = c.books || [];
+
+          return (
+            <div className="space-y-5">
+              {/* Bio versions */}
+              {bios.length > 0 && (
+                <div className="space-y-2">
+                  {bios.map(({ key, label, badge, badgeColor, text }) => (
+                    <div key={key} className="border border-slate-200 rounded-xl overflow-hidden">
+                      <button
+                        onClick={() => toggleBio(key)}
+                        className="w-full flex items-center justify-between px-5 py-3.5 bg-white hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${badgeColor}`}>{badge}</span>
+                          <span className="text-sm font-semibold text-slate-800">{label}</span>
+                        </div>
+                        <span className="text-slate-400 text-sm">{expandedBios.has(key) ? '▲' : '▼'}</span>
+                      </button>
+                      {expandedBios.has(key) && (
+                        <div className="px-5 py-4 border-t border-slate-100 bg-slate-50">
+                          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{text}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Speaking Topic Titles (long form) */}
+              {topicTitles.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Speaking Topic Titles</p>
+                  <ul className="space-y-1">
+                    {topicTitles.map((t: string, i: number) => (
+                      <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
+                        <span className="text-violet-400 font-bold shrink-0">{i + 1}.</span>{t}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Unusual Question */}
+              {c.content?.unusualQuestion && (
+                <div className="rounded-xl p-4 border border-rose-200 bg-rose-50">
+                  <p className="text-xs font-bold uppercase tracking-wide text-rose-600 mb-2">Unusual Question</p>
+                  <p className="text-sm text-slate-800 leading-relaxed">{c.content.unusualQuestion}</p>
+                </div>
+              )}
+
+              {/* Host Questions */}
+              {c.content?.hostQuestions && (() => {
+                const qs: string[] = c.content.hostQuestions.split('\n').map((q: string) => q.trim()).filter(Boolean);
+                return (
+                  <div>
+                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Host Questions</p>
+                    <ol className="space-y-1.5">
+                      {qs.map((q: string, i: number) => (
+                        <li key={i} className="flex gap-2 text-sm text-slate-700">
+                          <span className="text-violet-400 font-bold shrink-0">{i + 1}.</span>
+                          <span>{q}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                );
+              })()}
+
+              {/* Past Episode Links */}
+              {c.content?.pastEpisodeLinks && (() => {
+                const links: string[] = c.content.pastEpisodeLinks
+                  .split('\n')
+                  .map((l: string) => l.trim())
+                  .filter(Boolean);
+                if (links.length === 0) return null;
+                return (
+                  <div>
+                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Past Episode Links</p>
+                    <div className="space-y-1.5">
+                      {links.map((url: string, i: number) => (
+                        <a
+                          key={i}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg hover:bg-violet-50 hover:border-violet-200 transition-colors group"
+                        >
+                          <ExternalLink size={12} className="text-slate-400 group-hover:text-violet-500 flex-shrink-0" />
+                          <span className="text-sm text-indigo-600 hover:underline truncate">{url}</span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Books */}
+              {books.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Books</p>
+                  <div className="space-y-2">
+                    {books.map((b: { title: string; link: string }, i: number) => (
+                      <div key={i} className="flex items-center gap-3 p-3 bg-violet-50 border border-violet-200 rounded-xl">
+                        <span className="text-2xl flex-shrink-0">📖</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-slate-800">{b.title}</p>
+                          {b.link && (
+                            <a href={b.link} target="_blank" rel="noopener noreferrer" className="text-xs text-violet-600 hover:underline truncate block mt-0.5">
+                              {b.link}
+                            </a>
+                          )}
+                        </div>
+                        {b.link && (
+                          <a href={b.link} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 p-1.5 bg-violet-100 hover:bg-violet-200 rounded-lg transition-colors">
+                            <ExternalLink size={13} className="text-violet-600" />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </ClientSectionCard>
+
+      {/* ── SECTION 8 — AI PROFILE GENERATION ── */}
+
+      {/* Phase 1 — Before the Interview */}
+      <ClientSectionCard title="✨ Phase 1 — Before the Interview" accent="teal">
+        <div className="space-y-4">
+          {/* Generate button */}
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500">BioV1 + 15 interview questions + 5 suggested topics — from form data only, no transcript needed.</p>
+            <button
+              onClick={handlePhase1Generate}
+              disabled={phase1Loading}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-teal-600 to-cyan-600 text-white rounded-lg hover:from-teal-700 hover:to-cyan-700 disabled:opacity-50 text-sm font-semibold whitespace-nowrap"
+            >
+              {phase1Loading ? <><RefreshCw size={14} className="animate-spin" /> Generating...</> : <><Sparkles size={14} /> {(client.content as any)?.bioV1 ? 'Regenerate Phase 1' : '✨ Generate BioV1 + Interview Prep'}</>}
             </button>
           </div>
 
-          <div className="flex-1">
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <h1 className="text-2xl font-bold text-slate-900">{display.contact_name}</h1>
-                <p className="text-slate-600">
-                  {display.spokesperson?.title && `${display.spokesperson.title} at `}
-                  {display.company_name}
-                </p>
-                {/* AI Summary */}
-                {client.ai_summary ? (
-                  <p className="text-sm text-slate-500 mt-2 italic">{client.ai_summary}</p>
-                ) : (
-                  <button
-                    onClick={handleGenerateAISummary}
-                    disabled={generatingAISummary}
-                    className="mt-2 text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
-                  >
-                    {generatingAISummary ? (
-                      <RefreshCw size={12} className="animate-spin" />
-                    ) : (
-                      <Wand2 size={12} />
-                    )}
-                    {generatingAISummary ? 'Generating...' : 'Generate AI Summary'}
-                  </button>
-                )}
-              </div>
-              <div className="relative">
-                <button
-                  onClick={() => setShowStatusMenu(!showStatusMenu)}
-                  disabled={updating}
-                  className={`px-3 py-1 rounded-full text-sm font-bold capitalize flex items-center gap-2 hover:opacity-80 transition-opacity disabled:opacity-50
-                    ${display.status === 'active' ? 'bg-green-100 text-green-800' :
-                      display.status === 'onboarding' ? 'bg-amber-100 text-amber-800' :
-                      display.status === 'paused' ? 'bg-blue-100 text-blue-800' :
-                      'bg-slate-100 text-slate-600'}
-                  `}>
-                  {updating ? <RefreshCw size={14} className="animate-spin" /> : null}
-                  {display.status}
-                  <span className="text-xs">▼</span>
-                </button>
+          {phase1Error && (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">{phase1Error}</div>
+          )}
 
-                {showStatusMenu && !updating && (
-                  <div className="absolute top-full right-0 mt-2 bg-white border border-slate-200 rounded-lg shadow-lg z-10 min-w-[150px]">
-                    {(['active', 'onboarding', 'paused', 'churned'] as const).map(status => (
-                      <button
-                        key={status}
-                        onClick={() => handleStatusChange(status)}
-                        className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 first:rounded-t-lg last:rounded-b-lg capitalize
-                          ${display.status === status ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'text-slate-700'}
-                        `}
-                      >
-                        {status}
-                      </button>
+          {/* Saved data (visible when not in generation mode) */}
+          {!phase1Done && ((client.content as any)?.bioV1 || interviewQuestions.length > 0 || phase1SuggestedTopics.length > 0 || ((client.content as any)?.aiTopicTitles?.length > 0)) && (
+            <div className="space-y-4 p-4 bg-teal-50 rounded-xl border border-teal-200">
+              <p className="text-xs font-bold uppercase tracking-wider text-teal-700">Saved Phase 1 Data</p>
+              {(client.content as any)?.bioV1 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-teal-600 mb-1">Bio V1</p>
+                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{(client.content as any).bioV1}</p>
+                </div>
+              )}
+              {interviewQuestions.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-teal-600 mb-2">Interview Questions ({interviewQuestions.length})</p>
+                  <ol className="space-y-1.5">
+                    {interviewQuestions.map((q, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-slate-700">
+                        <span className="font-bold text-teal-600 shrink-0">{i + 1}.</span>
+                        <span>{q}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              {phase1SuggestedTopics.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-teal-600 mb-2">Suggested Topics</p>
+                  <div className="flex flex-wrap gap-2">
+                    {phase1SuggestedTopics.map((t, i) => (
+                      <span key={i} className="px-3 py-1.5 bg-cyan-50 text-cyan-700 border border-cyan-200 rounded-full text-sm font-medium">{t}</span>
                     ))}
                   </div>
-                )}
-              </div>
-            </div>
-
-            {/* Contact Info */}
-            <div className="flex flex-wrap gap-4 text-sm text-slate-600 mt-3">
-              {display.email && (
-                <div className="flex items-center gap-2">
-                  <Mail size={14} /> {display.email}
                 </div>
               )}
-              {display.phone && (
-                <div className="flex items-center gap-2">
-                  <Phone size={14} /> {display.phone}
-                </div>
-              )}
-              {client?.links?.linkedinAndSocial && (
-                <a
-                  href={client.links.linkedinAndSocial}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-indigo-600 hover:underline"
-                >
-                  <Linkedin size={14} /> LinkedIn
-                </a>
-              )}
-              {/* Badassery Profile Link */}
-              {client?.links?.badasseryProfileUrl && (
-                <div className="flex items-center gap-2">
-                  <a
-                    href={client.links.badasseryProfileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-indigo-600 hover:underline flex items-center gap-1"
-                  >
-                    <Globe size={14} /> Badassery Profile
-                  </a>
-                  <button
-                    onClick={handleCopyBadasseryLink}
-                    className="p-1 hover:bg-slate-100 rounded text-slate-500 hover:text-indigo-600"
-                    title="Copy link"
-                  >
-                    {copiedLink ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Signup Date & Duration */}
-            {client.metadata?.startDateUtc && (
-              <div className="flex items-center gap-4 mt-3 text-sm text-slate-500">
-                <div className="flex items-center gap-2">
-                  <Clock size={14} />
-                  <span>Client since {new Date(client.metadata.startDateUtc).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>
-                </div>
-                {getClientDuration() && (
-                  <span className="text-slate-400">({getClientDuration()})</span>
-                )}
-              </div>
-            )}
-
-            {/* Stats - Editable */}
-            <div className="flex flex-wrap gap-4 mt-4">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 rounded-lg">
-                <Target size={16} className="text-indigo-600" />
-                <span className="text-sm text-slate-600">
-                  <strong className="text-slate-900">{display.stats.matches}</strong> matches
-                </span>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 rounded-lg">
-                <Mail size={16} className="text-blue-600" />
-                <span className="text-sm text-slate-600">
-                  <strong className="text-slate-900">{display.stats.total_outreach_started}</strong> outreach
-                </span>
-              </div>
-
-              {/* Editable Booked & Goal */}
-              {editingStats ? (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-lg">
-                  <Calendar size={16} className="text-green-600" />
-                  <input
-                    type="number"
-                    value={statsForm.total_bookings}
-                    onChange={(e) => setStatsForm({ ...statsForm, total_bookings: parseInt(e.target.value) || 0 })}
-                    className="w-12 text-center border rounded px-1 text-sm font-bold"
-                  />
-                  <span className="text-sm text-slate-600">booked /</span>
-                  <input
-                    type="number"
-                    value={statsForm.goal_bookings}
-                    onChange={(e) => setStatsForm({ ...statsForm, goal_bookings: parseInt(e.target.value) || 0 })}
-                    className="w-12 text-center border rounded px-1 text-sm"
-                  />
-                  <span className="text-sm text-slate-600">goal</span>
-                  <button onClick={handleSaveStats} className="text-green-600 hover:text-green-700">
-                    <Check size={14} />
-                  </button>
-                  <button onClick={() => setEditingStats(false)} className="text-red-600 hover:text-red-700">
-                    <X size={14} />
-                  </button>
-                </div>
-              ) : (
-                <div
-                  onClick={handleStartEditStats}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-lg cursor-pointer hover:bg-green-100 transition-colors"
-                >
-                  <Calendar size={16} className="text-green-600" />
-                  <span className="text-sm text-slate-600">
-                    <strong className="text-slate-900">{display.stats.total_bookings}</strong> booked
-                    {display.stats.goal_bookings > 0 && (
-                      <>
-                        <span className="text-slate-400 mx-1">/</span>
-                        <span>{display.stats.goal_bookings} goal</span>
-                        <span className={`ml-2 font-bold ${
-                          (display.stats.total_bookings / display.stats.goal_bookings) >= 1 ? 'text-green-600' :
-                          (display.stats.total_bookings / display.stats.goal_bookings) >= 0.5 ? 'text-amber-600' :
-                          'text-slate-600'
-                        }`}>
-                          ({Math.round((display.stats.total_bookings / display.stats.goal_bookings) * 100)}%)
-                        </span>
-                      </>
-                    )}
-                  </span>
-                  <Edit2 size={12} className="text-slate-400 ml-1" />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
-        {[
-          { id: 'overview', label: 'Overview', icon: User },
-          { id: 'goals', label: 'Goals & Vision', icon: Target },
-          { id: 'brand', label: 'Brand & Voice', icon: Sparkles },
-          { id: 'podcast', label: 'Podcast Preferences', icon: MessageSquare },
-          { id: 'content', label: 'Content & Bio', icon: TrendingUp },
-          { id: 'aimatches', label: 'AI Matches', icon: Zap },
-          { id: 'wishlist', label: 'Wishlist', icon: Heart },
-          { id: 'outreach', label: 'Outreach', icon: Radio }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors
-              ${activeTab === tab.id
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}
-            `}
-          >
-            <tab.icon size={16} />
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto">
-        {/* OVERVIEW TAB */}
-        {activeTab === 'overview' && (
-          <div className="space-y-6">
-            {/* Identity */}
-            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-                <User size={20} className="text-indigo-600" />
-                Identity & Contact
-              </h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              {((client.content as any)?.aiTopicTitles?.length > 0) && (
                 <div>
-                  <label className="text-slate-500 font-medium">First Name</label>
-                  <p className="text-slate-900">{client.identity?.firstName || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Last Name</label>
-                  <p className="text-slate-900">{client.identity?.lastName || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Job Title</label>
-                  <p className="text-slate-900">{client.identity?.jobTitle || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Company</label>
-                  <p className="text-slate-900">{client.identity?.company || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Company Size</label>
-                  <p className="text-slate-900">{client.identity?.companySize || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Representation Type</label>
-                  <p className="text-slate-900">{client.identity?.representationType || 'N/A'}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Current Status */}
-            {client.currentStatus && (
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-                  <TrendingUp size={20} className="text-indigo-600" />
-                  Current Status
-                </h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <label className="text-slate-500 font-medium">Online Presence Rating</label>
-                    <p className="text-slate-900">{client.currentStatus.onlinePresenceRating || 'N/A'}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-teal-600 mb-2">AI Speaking Topic Titles</p>
+                  <div className="flex flex-col gap-2">
+                    {((client.content as any).aiTopicTitles as string[]).map((t, i) => (
+                      <div key={i} className="flex items-start gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 font-medium">
+                        <span className="text-amber-400 shrink-0">✦</span>
+                        {t}
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <label className="text-slate-500 font-medium">Content Frequency</label>
-                    <p className="text-slate-900">{client.currentStatus.contentFrequency || 'N/A'}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-slate-500 font-medium">Platforms Used</label>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {client.currentStatus.platformsUsed?.map(platform => (
-                        <span key={platform} className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-medium">
-                          {platform}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  {client.currentStatus.channelReach && (
-                    <div className="col-span-2">
-                      <label className="text-slate-500 font-medium">Channel Reach</label>
-                      <p className="text-slate-900 text-xs">{client.currentStatus.channelReach}</p>
-                    </div>
-                  )}
                 </div>
-              </div>
-            )}
-
-            {/* Tags */}
-            {client.metadata?.tags && client.metadata.tags.length > 0 && (
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-900 mb-4">Tags</h3>
-                <div className="flex flex-wrap gap-2">
-                  {client.metadata.tags.map(tag => (
-                    <span key={tag} className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* GOALS TAB */}
-        {activeTab === 'goals' && client.goals && (
-          <div className="space-y-6">
-            <InfoCard title="Professional Goals" icon={Target} content={client.goals.professionalGoals} />
-            <InfoCard title="Work Description" content={client.goals.workDescription} />
-            <InfoCard title="Mission Description" content={client.goals.missionDescription} />
-            <InfoCard title="Why Now?" content={client.goals.whyNow} />
-            <InfoCard title="Top 3 Goals" content={client.goals.top3Goals} highlight />
-            <InfoCard title="Challenges" content={client.goals.challenges} />
-            <InfoCard title="Success Definition" content={client.goals.successDefinition} highlight />
-          </div>
-        )}
-
-        {/* BRAND TAB */}
-        {activeTab === 'brand' && client.brandPersonality && (
-          <div className="space-y-6">
-            <InfoCard title="Three Adjectives" icon={Sparkles} content={client.brandPersonality.threeAdjectives} highlight />
-            <InfoCard title="How Audience Should Feel" content={client.brandPersonality.audienceFeeling} />
-            <InfoCard title="Key Phrases" content={client.brandPersonality.keyPhrases} />
-            <InfoCard title="Common Misunderstandings" content={client.brandPersonality.commonMisunderstandings} />
-            <InfoCard title="Passion Topics" content={client.brandPersonality.passionTopics} highlight />
-            <InfoCard title="Phrases to Avoid" content={client.brandPersonality.phrasesToAvoid} />
-            <InfoCard title="Admired Brands" content={client.brandPersonality.admiredBrands} />
-          </div>
-        )}
-
-        {/* PODCAST TAB */}
-        {activeTab === 'podcast' && client.podcast && (
-          <div className="space-y-6">
-            <InfoCard title="Target Audience" icon={MessageSquare} content={client.podcast.audienceDescription} />
-            <InfoCard title="Products/Services" content={client.podcast.productsServices} />
-            <InfoCard title="Dream Podcasts" content={client.podcast.dreamPodcasts} highlight />
-            <InfoCard title="Key Questions" content={client.podcast.keyQuestions} />
-            <InfoCard title="Unasked Question" content={client.podcast.unaskedQuestion} />
-            <InfoCard title="Listener Takeaways" content={client.podcast.listenerTakeaways} />
-
-            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <label className="text-slate-500 font-medium">Target Location</label>
-                  <p className="text-slate-900">{client.podcast.targetLocation}</p>
-                </div>
-                <div>
-                  <label className="text-slate-500 font-medium">Open to In-Person</label>
-                  <p className="text-slate-900">{client.podcast.openToInPerson ? 'Yes ✓' : 'No'}</p>
-                </div>
-              </div>
+              )}
             </div>
+          )}
 
-            {client.podcast.upcomingLaunches && (
-              <InfoCard title="Upcoming Launches" content={client.podcast.upcomingLaunches} highlight />
-            )}
-          </div>
-        )}
-
-        {/* CONTENT TAB */}
-        {activeTab === 'content' && client.content && (
-          <div className="space-y-6">
-            {/* AI Bio Enhancement Button */}
-            {client.content.bioOriginal && !client.content.bioUpdated && (
-              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border-2 border-dashed border-indigo-300 rounded-xl p-6 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-2 flex items-center gap-2">
-                      <Wand2 size={20} className="text-indigo-600" />
-                      Enhance Bio with AI
-                    </h3>
-                    <p className="text-sm text-slate-600">
-                      Transform your original bio into a compelling, storytelling-driven professional bio using AI.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleEnhanceBio}
-                    disabled={isGeneratingBio}
-                    className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
-                  >
-                    {isGeneratingBio ? (
-                      <>
-                        <RefreshCw size={18} className="animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <Wand2 size={18} />
-                        Generate Enhanced Bio
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {client.content.bioOriginal && (
-              <InfoCard title="Bio (Original)" content={client.content.bioOriginal} />
-            )}
-            {client.content.bioUpdated && (
-              <InfoCard title="Bio (Updated)" content={client.content.bioUpdated} highlight />
-            )}
-            {client.content.speakingTopicsOriginal && (
-              <InfoCard title="Speaking Topics (Original)" content={client.content.speakingTopicsOriginal} />
-            )}
-            {client.content.speakingTopicsUpdated && (
-              <InfoCard title="Speaking Topics (Updated)" content={client.content.speakingTopicsUpdated} highlight />
-            )}
-            {client.content.speakingTopicsArray && client.content.speakingTopicsArray.length > 0 && (
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-900 mb-4">Speaking Topics</h3>
-                <div className="flex flex-wrap gap-2">
-                  {client.content.speakingTopicsArray.map(topic => (
-                    <span key={topic} className="px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium border border-indigo-200">
-                      {topic}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* AI MATCHES TAB */}
-        {activeTab === 'aimatches' && (
-          <div className="space-y-6">
-            {/* AI Matches Header */}
-            <div className="flex items-center justify-between">
+          {/* Generation results */}
+          {phase1Done && (
+            <div className="space-y-4">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">AI Podcast Matches</h3>
-                <p className="text-sm text-slate-500">Podcasts matched by AI based on client profile</p>
+                <p className="text-xs font-bold uppercase tracking-wide text-teal-600 mb-2">Bio V1 (Generated)</p>
+                <textarea
+                  value={phase1Bio}
+                  onChange={e => setPhase1Bio(e.target.value)}
+                  rows={8}
+                  className="w-full text-sm border border-teal-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-teal-400 focus:outline-none leading-relaxed"
+                />
               </div>
-              <button
-                onClick={handleGenerateMatches}
-                disabled={generatingMatches}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all"
-              >
-                {generatingMatches ? (
-                  <RefreshCw size={16} className="animate-spin" />
-                ) : (
-                  <Zap size={16} />
-                )}
-                {generatingMatches ? 'Generating...' : 'Generate New Matches'}
-              </button>
-            </div>
-
-            {/* Match Stats */}
-            {matchStats && (
-              <div className="grid grid-cols-4 gap-4">
-                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                  <div className="text-sm text-slate-600 mb-1">Total</div>
-                  <div className="text-2xl font-bold text-slate-900">{matchStats.total}</div>
+              {phase1Questions.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-teal-600 mb-2">Interview Questions ({phase1Questions.length})</p>
+                  <ol className="space-y-2 bg-white rounded-lg border border-teal-200 p-4">
+                    {phase1Questions.map((q, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-slate-800">
+                        <span className="font-bold text-teal-600 shrink-0">{i + 1}.</span>
+                        <span>{q}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-                <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200 shadow-sm">
-                  <div className="text-sm text-yellow-700 mb-1">Pending</div>
-                  <div className="text-2xl font-bold text-yellow-900">{matchStats.pending}</div>
+              )}
+              {phase1SuggestedTopics.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-teal-600 mb-2">Suggested Topics</p>
+                  <div className="flex flex-wrap gap-2">
+                    {phase1SuggestedTopics.map((t, i) => (
+                      <span key={i} className="px-3 py-1.5 bg-cyan-50 text-cyan-700 border border-cyan-200 rounded-full text-sm font-medium">{t}</span>
+                    ))}
+                  </div>
                 </div>
-                <div className="bg-green-50 p-4 rounded-lg border border-green-200 shadow-sm">
-                  <div className="text-sm text-green-700 mb-1">Approved</div>
-                  <div className="text-2xl font-bold text-green-900">{matchStats.approved}</div>
+              )}
+              {phase1SuggestedTitles.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-teal-600 mb-2">Suggested Speaking Topic Titles</p>
+                  <div className="flex flex-col gap-2">
+                    {phase1SuggestedTitles.map((t, i) => (
+                      <div key={i} className="flex items-start gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 font-medium">
+                        <span className="text-amber-400 shrink-0">✦</span>
+                        {t}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="bg-red-50 p-4 rounded-lg border border-red-200 shadow-sm">
-                  <div className="text-sm text-red-700 mb-1">Rejected</div>
-                  <div className="text-2xl font-bold text-red-900">{matchStats.rejected}</div>
-                </div>
-              </div>
-            )}
-
-            {/* Matches List */}
-            {loadingMatches ? (
-              <div className="flex items-center justify-center py-12">
-                <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
-                <span className="ml-2 text-slate-600">Loading matches...</span>
-              </div>
-            ) : aiMatches.length === 0 ? (
-              <div className="text-center py-12 bg-slate-50 rounded-lg border border-slate-200">
-                <Zap className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                <p className="text-slate-600 mb-4">No AI matches yet</p>
+              )}
+              <div className="flex items-center gap-3">
+                <button onClick={handlePhase1Save} className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-semibold hover:bg-teal-700">
+                  <Check size={14} /> Save Phase 1
+                </button>
                 <button
-                  onClick={handleGenerateMatches}
-                  disabled={generatingMatches}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  onClick={() => { setPhase1Done(false); setPhase1Bio(''); setPhase1Questions([]); setPhase1SuggestedTopics((client.content as any)?.suggestedTopics || []); setPhase1SuggestedTitles([]); setPhase1Error(null); }}
+                  className="px-4 py-2 border border-slate-300 text-slate-600 rounded-lg text-sm hover:bg-slate-50"
                 >
-                  Generate First Matches
+                  Start Over
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </ClientSectionCard>
+
+      {/* Phase 2 — After the Interview */}
+      <ClientSectionCard title="🎙 Phase 2 — After the Interview" accent="violet">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">Upload the interview transcript (PDF) to generate the Final Bio + updated speaking topics.</p>
+
+          {/* PDF dropzone */}
+          <div>
+            <input
+              type="file"
+              accept="application/pdf"
+              ref={pdfInputRef}
+              onChange={e => setPdfFile(e.target.files?.[0] || null)}
+              className="hidden"
+            />
+            {pdfFile ? (
+              <div className="flex items-center gap-3 p-3 bg-violet-50 border border-violet-200 rounded-lg">
+                <span className="text-sm font-medium text-violet-700 flex-1 truncate">📄 {pdfFile.name}</span>
+                <button onClick={() => { setPdfFile(null); if (pdfInputRef.current) pdfInputRef.current.value = ''; }} className="text-slate-400 hover:text-red-500">
+                  <X size={16} />
                 </button>
               </div>
             ) : (
-              <div className="space-y-4">
-                {aiMatches.map(match => (
-                  <div
-                    key={match.id}
-                    className={`bg-white p-4 rounded-lg border shadow-sm ${
-                      match.status === 'pending' ? 'border-yellow-200' :
-                      match.status === 'approved' ? 'border-green-200' :
-                      'border-red-200 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-start gap-4">
-                      {/* Podcast Image */}
-                      {match.podcast?.imageUrl && (
-                        <img
-                          src={match.podcast.imageUrl}
-                          alt={match.podcast.title || 'Podcast'}
-                          className="w-16 h-16 rounded-lg object-cover"
-                        />
-                      )}
-
-                      {/* Match Info */}
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between mb-1">
-                          <h4 className="font-bold text-slate-900">
-                            {match.podcast?.title || 'Unknown Podcast'}
-                          </h4>
-                          <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
-                            match.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                            match.status === 'approved' ? 'bg-green-100 text-green-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
-                            <Star size={12} />
-                            {match.match_score}/100
-                          </div>
-                        </div>
-
-                        <p className="text-sm text-slate-600 mb-2">{match.match_reasoning}</p>
-
-                        {/* Topics */}
-                        <div className="flex flex-wrap gap-1 mb-3">
-                          {match.match_topics.slice(0, 5).map(topic => (
-                            <span key={topic} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-xs">
-                              {topic}
-                            </span>
-                          ))}
-                        </div>
-
-                        {/* Actions */}
-                        {match.status === 'pending' && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleApproveMatch(match.id)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium"
-                            >
-                              <CheckCircle size={14} />
-                              Approve & Create Outreach
-                            </button>
-                            <button
-                              onClick={() => handleRejectMatch(match.id)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 text-sm font-medium"
-                            >
-                              <XCircle size={14} />
-                              Reject
-                            </button>
-                            {match.podcast?.apple_api_url && (
-                              <a
-                                href={match.podcast.apple_api_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1 px-3 py-1.5 text-slate-600 hover:text-indigo-600 text-sm"
-                              >
-                                <ExternalLink size={14} />
-                                View
-                              </a>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <button
+                onClick={() => pdfInputRef.current?.click()}
+                className="w-full border-2 border-dashed border-violet-200 rounded-xl p-6 text-center hover:border-violet-400 hover:bg-violet-50 transition-colors"
+              >
+                <p className="text-sm font-medium text-violet-600">Click to upload transcript PDF</p>
+                <p className="text-xs text-slate-400 mt-1">PDF only</p>
+              </button>
             )}
           </div>
-        )}
 
-        {/* WISHLIST TAB */}
-        {activeTab === 'wishlist' && (
-          <div className="space-y-6">
-            {/* Wishlist Header */}
-            <div className="flex items-center justify-between">
+          {pdfFile && !aiProfileDone && (
+            <button
+              onClick={handleAiProfileGenerate}
+              disabled={aiProfileLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-lg hover:from-violet-700 hover:to-indigo-700 disabled:opacity-50 text-sm font-semibold"
+            >
+              {aiProfileLoading ? <><RefreshCw size={14} className="animate-spin" /> Generating...</> : <><Sparkles size={14} /> 🎙 Generate Final Bio</>}
+            </button>
+          )}
+
+          {aiProfileError && (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">{aiProfileError}</div>
+          )}
+
+          {/* Generation results */}
+          {aiProfileDone && (
+            <div className="space-y-4">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Podcast Wishlist</h3>
-                <p className="text-sm text-slate-500">Podcasts manually tagged as good fits</p>
-              </div>
-              <div className="text-sm text-slate-600">
-                {wishlistItems.filter(i => i.status === 'wishlist').length} pending
-              </div>
-            </div>
-
-            {/* Wishlist Items */}
-            {loadingWishlist ? (
-              <div className="flex items-center justify-center py-12">
-                <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
-                <span className="ml-2 text-slate-600">Loading wishlist...</span>
-              </div>
-            ) : wishlistItems.length === 0 ? (
-              <div className="text-center py-12 bg-slate-50 rounded-lg border border-slate-200">
-                <Heart className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                <p className="text-slate-600 mb-2">No podcasts in wishlist yet</p>
-                <p className="text-sm text-slate-500">Browse podcasts and add them to this client's wishlist</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {wishlistItems.map(item => (
-                  <div
-                    key={item.id}
-                    className={`bg-white p-4 rounded-lg border shadow-sm ${
-                      item.status === 'wishlist' ? 'border-pink-200' :
-                      item.status === 'outreach' ? 'border-green-200' :
-                      'border-slate-200 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-4">
-                      {/* Podcast Image */}
-                      {item.podcast?.imageUrl && (
-                        <img
-                          src={item.podcast.imageUrl}
-                          alt={item.podcast.title || 'Podcast'}
-                          className="w-12 h-12 rounded-lg object-cover"
-                        />
-                      )}
-
-                      {/* Info */}
-                      <div className="flex-1">
-                        <h4 className="font-medium text-slate-900">
-                          {item.podcast?.title || item.podcast_itunes_id}
-                        </h4>
-                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                          <span>Added by {item.added_by}</span>
-                          <span>
-                            {item.added_at?.toDate?.().toLocaleDateString() || 'Unknown date'}
-                          </span>
-                          {item.priority && (
-                            <span className={`px-2 py-0.5 rounded ${
-                              item.priority === 'high' ? 'bg-red-100 text-red-700' :
-                              item.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-slate-100 text-slate-700'
-                            }`}>
-                              {item.priority}
-                            </span>
-                          )}
-                        </div>
-                        {item.notes && (
-                          <p className="text-sm text-slate-600 mt-1">{item.notes}</p>
-                        )}
-                      </div>
-
-                      {/* Status & Actions */}
-                      <div className="flex items-center gap-2">
-                        {item.status === 'wishlist' && (
-                          <>
-                            <button
-                              onClick={() => handleMoveToOutreach(item.id)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 text-sm font-medium"
-                            >
-                              <Send size={14} />
-                              Start Outreach
-                            </button>
-                            <button
-                              onClick={() => handleRemoveFromWishlist(item.id)}
-                              className="p-1.5 text-slate-400 hover:text-red-500"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </>
-                        )}
-                        {item.status === 'outreach' && (
-                          <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
-                            Outreach Created
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* OUTREACH TAB */}
-        {activeTab === 'outreach' && (
-          <div className="space-y-6">
-            {/* Outreach Stats */}
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                <div className="text-sm text-slate-600 mb-1">Total Podcasts</div>
-                <div className="text-2xl font-bold text-slate-900">{outreach.length}</div>
-              </div>
-              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 shadow-sm">
-                <div className="text-sm text-blue-700 mb-1">Sent</div>
-                <div className="text-2xl font-bold text-blue-900">
-                  {outreach.filter(item => item['Outreach Status'] === '1st message sent' || item['Outreach Status'] === '1st follow- up sent' || item['Outreach Status'] === '2nd follow-up sent').length}
-                </div>
-              </div>
-              <div className="bg-purple-50 p-4 rounded-lg border border-purple-200 shadow-sm">
-                <div className="text-sm text-purple-700 mb-1">Scheduled</div>
-                <div className="text-2xl font-bold text-purple-900">
-                  {outreach.filter(item => item['Outreach Status'] === 'Recording Scheduled' || item['Outreach Status'] === 'Screening Call Scheduled').length}
-                </div>
-              </div>
-              <div className="bg-green-50 p-4 rounded-lg border border-green-200 shadow-sm">
-                <div className="text-sm text-green-700 mb-1">Live</div>
-                <div className="text-2xl font-bold text-green-900">
-                  {outreach.filter(item => item['Outreach Status'] === 'Live').length}
-                </div>
-              </div>
-            </div>
-
-            {/* Search and Filter */}
-            <div className="flex gap-4">
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="text"
-                  placeholder="Search podcasts..."
-                  value={outreachSearch}
-                  onChange={(e) => setOutreachSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                <p className="text-xs font-bold uppercase tracking-wide text-violet-600 mb-2">Final Bio (Generated)</p>
+                <textarea
+                  value={aiProfileBio}
+                  onChange={e => setAiProfileBio(e.target.value)}
+                  rows={8}
+                  className="w-full text-sm border border-violet-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-violet-400 focus:outline-none leading-relaxed"
                 />
               </div>
-              <select
-                value={outreachStatusFilter}
-                onChange={(e) => setOutreachStatusFilter(e.target.value)}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 text-sm"
-              >
-                <option value="all">All Status</option>
-                <option value="ready_for_outreach">Ready for Outreach</option>
-                <option value="1st_email_sent">1st Email Sent</option>
-                <option value="1st_followup_sent">1st Follow-up Sent</option>
-                <option value="2nd_followup_sent">2nd Follow-up Sent</option>
-                <option value="in_contact">In Contact</option>
-                <option value="scheduling_screening">Scheduling Screening</option>
-                <option value="screening_scheduled">Screening Scheduled</option>
-                <option value="scheduling_recording">Scheduling Recording</option>
-                <option value="recording_scheduled">Recording Scheduled</option>
-                <option value="recorded">Recorded</option>
-                <option value="live">Live</option>
-              </select>
+              {aiProfileTopics.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-violet-600 mb-2">Speaking Topics (5)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {aiProfileTopics.map((topic, i) => (
+                      <input
+                        key={i}
+                        type="text"
+                        value={topic}
+                        onChange={e => { const next = [...aiProfileTopics]; next[i] = e.target.value; setAiProfileTopics(next); }}
+                        className="px-3 py-1.5 bg-violet-50 border border-violet-200 rounded-full text-sm text-violet-700 font-medium focus:ring-2 focus:ring-violet-400 focus:outline-none"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {aiProfileTitles.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-violet-600 mb-2">Speaking Topic Titles (3)</p>
+                  <div className="flex flex-col gap-2">
+                    {aiProfileTitles.map((title, i) => (
+                      <input
+                        key={i}
+                        type="text"
+                        value={title}
+                        onChange={e => { const next = [...aiProfileTitles]; next[i] = e.target.value; setAiProfileTitles(next); }}
+                        className="w-full border border-violet-200 rounded-lg px-4 py-2.5 text-sm text-violet-900 font-medium bg-violet-50 focus:ring-2 focus:ring-violet-400 focus:outline-none"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <button onClick={handleAiProfileSave} className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700">
+                  <Check size={14} /> Save Final Bio + Topics + Titles
+                </button>
+                <button
+                  onClick={() => { setAiProfileDone(false); setAiProfileBio(''); setAiProfileTopics([]); setAiProfileTitles([]); setAiProfileError(null); }}
+                  className="px-4 py-2 border border-slate-300 text-slate-600 rounded-lg text-sm hover:bg-slate-50"
+                >
+                  Start Over
+                </button>
+              </div>
             </div>
+          )}
+        </div>
+      </ClientSectionCard>
 
-            {/* Outreach Table */}
-            {loadingOutreach ? (
-              <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
-                <RefreshCw className="animate-spin mx-auto text-slate-400 mb-2" size={32} />
-                <p className="text-slate-500">Loading outreach data...</p>
-              </div>
-            ) : filteredOutreach.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
-                <Radio className="mx-auto text-slate-300 mb-3" size={48} />
-                <p className="text-slate-500 font-medium mb-1">No outreach yet</p>
-                <p className="text-sm text-slate-400">Podcast outreach for this client will appear here</p>
-              </div>
-            ) : (
-              <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          Podcast
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          iTunes ID
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          Host Contact
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          Data Status
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          Outreach Status
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                          Date Added
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {filteredOutreach.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50">
-                          {/* Podcast */}
-                          <td className="px-4 py-3">
-                            <div className="flex items-start gap-2">
-                              <div className="flex-1">
-                                <div className="font-medium text-slate-900">{item.showName}</div>
-                                {item.showLink && (
-                                  <a
-                                    href={item.showLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1"
-                                  >
-                                    View Podcast <ExternalLink size={12} />
-                                  </a>
-                                )}
-                              </div>
-                              {item.needsManualReview && (
-                                <AlertCircle className="text-yellow-500 flex-shrink-0" size={16} />
-                              )}
-                            </div>
-                          </td>
-
-                          {/* iTunes ID */}
-                          <td className="px-4 py-3">
-                            {editingItunesId === item.id ? (
-                              <div className="flex gap-2">
-                                <input
-                                  type="text"
-                                  value={editItunesValue}
-                                  onChange={(e) => setEditItunesValue(e.target.value)}
-                                  placeholder="Enter iTunes ID"
-                                  className="px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
-                                  autoFocus
-                                />
-                                <button
-                                  onClick={() => handleSaveItunesId(item.id)}
-                                  className="p-1 text-green-600 hover:text-green-800"
-                                >
-                                  <Check size={16} />
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setEditingItunesId(null);
-                                    setEditItunesValue('');
-                                  }}
-                                  className="p-1 text-slate-400 hover:text-slate-600"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2">
-                                {item.itunesId ? (
-                                  <span className="text-sm font-mono text-slate-900">{item.itunesId}</span>
-                                ) : (
-                                  <span className="text-sm text-slate-400 italic">Not set</span>
-                                )}
-                                {item.needsManualReview && (
-                                  <button
-                                    onClick={() => {
-                                      setEditingItunesId(item.id);
-                                      setEditItunesValue(item.itunesId || '');
-                                    }}
-                                    className="p-1 text-indigo-600 hover:text-indigo-800"
-                                  >
-                                    <Edit2 size={14} />
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </td>
-
-                          {/* Host Contact */}
-                          <td className="px-4 py-3">
-                            {(() => {
-                              const bestEmail = getBestHostEmail(item);
-                              const isEditing = editingEmailId === item.id;
-
-                              return isEditing ? (
-                                <div className="flex gap-2">
-                                  <input
-                                    type="email"
-                                    value={editEmailValue}
-                                    onChange={(e) => setEditEmailValue(e.target.value)}
-                                    placeholder="Enter email"
-                                    className="px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 w-48"
-                                    autoFocus
-                                  />
-                                  <button
-                                    onClick={() => handleSaveHostEmail(item.id)}
-                                    className="p-1 text-green-600 hover:text-green-800"
-                                  >
-                                    <Check size={16} />
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setEditingEmailId(null);
-                                      setEditEmailValue('');
-                                    }}
-                                    className="p-1 text-slate-400 hover:text-slate-600"
-                                  >
-                                    <X size={16} />
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    {/* Confidence Icon */}
-                                    {bestEmail.email && (
-                                      <>
-                                        {bestEmail.confidence === 'high' && (
-                                          <CheckCircle className="text-green-600 flex-shrink-0" size={14} />
-                                        )}
-                                        {bestEmail.confidence === 'medium' && (
-                                          <AlertCircle className="text-yellow-600 flex-shrink-0" size={14} />
-                                        )}
-                                        {bestEmail.confidence === 'low' && (
-                                          <XCircle className="text-red-600 flex-shrink-0" size={14} />
-                                        )}
-                                      </>
-                                    )}
-
-                                    {/* Email */}
-                                    <div className="flex-1 min-w-0">
-                                      {bestEmail.email ? (
-                                        <div className="text-sm text-slate-900 truncate">{bestEmail.email}</div>
-                                      ) : (
-                                        <div className="text-sm text-slate-400 italic">No email</div>
-                                      )}
-                                      <div className="text-xs text-slate-500">
-                                        {bestEmail.source && `${bestEmail.source} • ${bestEmail.confidence}`}
-                                      </div>
-                                    </div>
-
-                                    {/* Actions */}
-                                    <div className="flex items-center gap-1">
-                                      {/* Edit button */}
-                                      <button
-                                        onClick={() => {
-                                          setEditingEmailId(item.id);
-                                          setEditEmailValue(bestEmail.email || '');
-                                        }}
-                                        className="p-1 text-indigo-600 hover:text-indigo-800"
-                                        title="Edit email"
-                                      >
-                                        <Edit2 size={14} />
-                                      </button>
-
-                                      {/* Show all emails button */}
-                                      {bestEmail.allEmails.length > 1 && (
-                                        <button
-                                          onClick={() => setShowEmailModalId(item.id)}
-                                          className="p-1 text-slate-600 hover:text-slate-800"
-                                          title={`${bestEmail.allEmails.length} emails available`}
-                                        >
-                                          <Info size={14} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* LinkedIn */}
-                                  {item.hostContactInfo.linkedin && (
-                                    <a
-                                      href={item.hostContactInfo.linkedin}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-indigo-600 hover:text-indigo-800 text-xs flex items-center gap-1"
-                                    >
-                                      LinkedIn <ExternalLink size={10} />
-                                    </a>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </td>
-
-                          {/* Data Status */}
-                          <td className="px-4 py-3">
-                            <select
-                              value={item.status}
-                              onChange={(e) => handleOutreachStatusChange(item.id, e.target.value as OutreachDocument['status'])}
-                              className={`text-xs px-2 py-1 rounded-full border ${
-                                item.status === 'needs_itunes_id'
-                                  ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-                                  : item.status === 'identified'
-                                  ? 'bg-blue-100 text-blue-800 border-blue-300'
-                                  : 'bg-slate-100 text-slate-800 border-slate-300'
-                              }`}
-                            >
-                              <option value="needs_itunes_id">Needs iTunes ID</option>
-                              <option value="identified">Identified</option>
-                            </select>
-                          </td>
-
-                          {/* Outreach Status */}
-                          <td className="px-4 py-3">
-                            <select
-                              value={item['Outreach Status'] || ''}
-                              onChange={(e) => handleWorkflowStatusChange(item.id, e.target.value as OutreachDocument['Outreach Status'])}
-                              className={`text-xs px-2 py-1 rounded-full border ${
-                                !item['Outreach Status']
-                                  ? 'bg-slate-100 text-slate-800 border-slate-300'
-                                  : item['Outreach Status'] === 'Ready for outreach'
-                                  ? 'bg-blue-100 text-blue-800 border-blue-300'
-                                  : item['Outreach Status'] === '1st message sent' || item['Outreach Status'] === '1st follow- up sent' || item['Outreach Status'] === '2nd follow-up sent'
-                                  ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
-                                  : item['Outreach Status'] === 'Scheduling Screening Call' || item['Outreach Status'] === 'Screening Call Scheduled' || item['Outreach Status'] === 'Scheduling Recording'
-                                  ? 'bg-purple-100 text-purple-800 border-purple-300'
-                                  : item['Outreach Status'] === 'Recording Scheduled' || item['Outreach Status'] === 'Recorded'
-                                  ? 'bg-orange-100 text-orange-800 border-orange-300'
-                                  : item['Outreach Status'] === 'Live'
-                                  ? 'bg-green-100 text-green-800 border-green-300'
-                                  : item['Outreach Status'] === 'Host said no' || item['Outreach Status'] === 'Email bounced'
-                                  ? 'bg-red-100 text-red-800 border-red-300'
-                                  : item['Outreach Status'] === 'Paid podcast' || item['Outreach Status'] === 'Blacklist'
-                                  ? 'bg-gray-100 text-gray-800 border-gray-300'
-                                  : 'bg-slate-100 text-slate-800 border-slate-300'
-                              }`}
-                            >
-                              <option value="">Not Set</option>
-                              <option value="Ready for outreach">Ready for Outreach</option>
-                              <option value="1st message sent">1st Message Sent</option>
-                              <option value="1st follow- up sent">1st Follow-up Sent</option>
-                              <option value="2nd follow-up sent">2nd Follow-up Sent</option>
-                              <option value="Scheduling Screening Call">Scheduling Screening Call</option>
-                              <option value="Screening Call Scheduled">Screening Call Scheduled</option>
-                              <option value="Scheduling Recording">Scheduling Recording</option>
-                              <option value="Recording Scheduled">Recording Scheduled</option>
-                              <option value="Recorded">Recorded</option>
-                              <option value="Live">Live</option>
-                              <option value="Host said no">Host Said No</option>
-                              <option value="Email bounced">Email Bounced</option>
-                              <option value="Paid podcast">Paid Podcast</option>
-                              <option value="Blacklist">Blacklist</option>
-                            </select>
-                          </td>
-
-                          {/* Date Added */}
-                          <td className="px-4 py-3">
-                            <div className="text-xs text-slate-500">
-                              {item.createdAt && new Date(item.createdAt.toDate()).toLocaleDateString()}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+      {/* ── SECTION 9 — WISHLIST ── */}
+      <ClientSectionCard
+        title="💛 Wishlist"
+        accent="rose"
+        headerRight={
+          <span className="text-sm text-slate-500">{wishlistItems.filter(i => i.status === 'wishlist').length} pending</span>
+        }
+      >
+        {loadingWishlist ? (
+          <div className="flex items-center justify-center py-12">
+            <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
+            <span className="ml-2 text-slate-600">Loading wishlist...</span>
+          </div>
+        ) : wishlistItems.length === 0 ? (
+          <div className="text-center py-12 bg-slate-50 rounded-lg border border-slate-200">
+            <Heart className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <p className="text-slate-600 mb-2">No podcasts in wishlist yet</p>
+            <p className="text-sm text-slate-500">Browse podcasts and add them to this client's wishlist</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {wishlistItems.map(item => (
+              <div
+                key={item.id}
+                className={`bg-white p-4 rounded-lg border shadow-sm ${
+                  item.status === 'wishlist' ? 'border-pink-200' :
+                  item.status === 'outreach' ? 'border-green-200' :
+                  'border-slate-200 opacity-60'
+                }`}
+              >
+                <div className="flex items-center gap-4">
+                  {item.podcast?.imageUrl && (
+                    <img src={item.podcast.imageUrl} alt={item.podcast.title || 'Podcast'} className="w-12 h-12 rounded-lg object-cover" />
+                  )}
+                  <div className="flex-1">
+                    <h4 className="font-medium text-slate-900">{item.podcast?.title || item.podcast_itunes_id}</h4>
+                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                      <span>Added by {item.added_by}</span>
+                      <span>{item.added_at?.toDate?.().toLocaleDateString() || 'Unknown date'}</span>
+                      {item.priority && (
+                        <span className={`px-2 py-0.5 rounded ${
+                          item.priority === 'high' ? 'bg-red-100 text-red-700' :
+                          item.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>{item.priority}</span>
+                      )}
+                    </div>
+                    {item.notes && <p className="text-sm text-slate-600 mt-1">{item.notes}</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {item.status === 'wishlist' && (
+                      <>
+                        <button onClick={() => handleMoveToOutreach(item.id)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200 text-sm font-medium">
+                          <Send size={14} /> Start Outreach
+                        </button>
+                        <button onClick={() => handleRemoveFromWishlist(item.id)} className="p-1.5 text-slate-400 hover:text-red-500">
+                          <Trash2 size={16} />
+                        </button>
+                      </>
+                    )}
+                    {item.status === 'outreach' && (
+                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">Outreach Created</span>
+                    )}
+                  </div>
                 </div>
               </div>
-            )}
+            ))}
           </div>
         )}
-      </div>
+      </ClientSectionCard>
+
+      {/* ── SECTION 10 — OUTREACH ── */}
+      <ClientSectionCard title="📡 Outreach" accent="default">
+        <div className="space-y-6">
+          {/* Stats */}
+          <div className="grid grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+              <div className="text-sm text-slate-600 mb-1">Total Podcasts</div>
+              <div className="text-2xl font-bold text-slate-900">{outreach.length}</div>
+            </div>
+            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 shadow-sm">
+              <div className="text-sm text-blue-700 mb-1">Sent</div>
+              <div className="text-2xl font-bold text-blue-900">
+                {outreach.filter(item => item['Outreach Status'] === '1st message sent' || item['Outreach Status'] === '1st follow- up sent' || item['Outreach Status'] === '2nd follow-up sent').length}
+              </div>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg border border-purple-200 shadow-sm">
+              <div className="text-sm text-purple-700 mb-1">Scheduled</div>
+              <div className="text-2xl font-bold text-purple-900">
+                {outreach.filter(item => item['Outreach Status'] === 'Recording Scheduled' || item['Outreach Status'] === 'Screening Call Scheduled').length}
+              </div>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg border border-green-200 shadow-sm">
+              <div className="text-sm text-green-700 mb-1">Live</div>
+              <div className="text-2xl font-bold text-green-900">
+                {outreach.filter(item => item['Outreach Status'] === 'Live').length}
+              </div>
+            </div>
+          </div>
+
+          {/* Search and Filter */}
+          <div className="flex gap-4">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input
+                type="text"
+                placeholder="Search podcasts..."
+                value={outreachSearch}
+                onChange={(e) => setOutreachSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              />
+            </div>
+            <select
+              value={outreachStatusFilter}
+              onChange={(e) => setOutreachStatusFilter(e.target.value)}
+              className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 text-sm"
+            >
+              <option value="all">All Status</option>
+              <option value="ready_for_outreach">Ready for Outreach</option>
+              <option value="1st_email_sent">1st Email Sent</option>
+              <option value="1st_followup_sent">1st Follow-up Sent</option>
+              <option value="2nd_followup_sent">2nd Follow-up Sent</option>
+              <option value="in_contact">In Contact</option>
+              <option value="scheduling_screening">Scheduling Screening</option>
+              <option value="screening_scheduled">Screening Scheduled</option>
+              <option value="scheduling_recording">Scheduling Recording</option>
+              <option value="recording_scheduled">Recording Scheduled</option>
+              <option value="recorded">Recorded</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+
+          {/* Table */}
+          {loadingOutreach ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
+              <RefreshCw className="animate-spin mx-auto text-slate-400 mb-2" size={32} />
+              <p className="text-slate-500">Loading outreach data...</p>
+            </div>
+          ) : filteredOutreach.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm text-center">
+              <Radio className="mx-auto text-slate-300 mb-3" size={48} />
+              <p className="text-slate-500 font-medium mb-1">No outreach yet</p>
+              <p className="text-sm text-slate-400">Podcast outreach for this client will appear here</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Podcast</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">iTunes ID</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Host Contact</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Data Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Outreach Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date Added</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {filteredOutreach.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3">
+                          <div className="flex items-start gap-2">
+                            <div className="flex-1">
+                              <div className="font-medium text-slate-900">{item.showName}</div>
+                              {item.showLink && (
+                                <a href={item.showLink} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1">
+                                  View Podcast <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </div>
+                            {item.needsManualReview && <AlertCircle className="text-yellow-500 flex-shrink-0" size={16} />}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {editingItunesId === item.id ? (
+                            <div className="flex gap-2">
+                              <input type="text" value={editItunesValue} onChange={(e) => setEditItunesValue(e.target.value)} placeholder="Enter iTunes ID" className="px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500" autoFocus />
+                              <button onClick={() => handleSaveItunesId(item.id)} className="p-1 text-green-600 hover:text-green-800"><Check size={16} /></button>
+                              <button onClick={() => { setEditingItunesId(null); setEditItunesValue(''); }} className="p-1 text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              {item.itunesId ? (
+                                <span className="text-sm font-mono text-slate-900">{item.itunesId}</span>
+                              ) : (
+                                <span className="text-sm text-slate-400 italic">Not set</span>
+                              )}
+                              {item.needsManualReview && (
+                                <button onClick={() => { setEditingItunesId(item.id); setEditItunesValue(item.itunesId || ''); }} className="p-1 text-indigo-600 hover:text-indigo-800">
+                                  <Edit2 size={14} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
+                            const bestEmail = getBestHostEmail(item);
+                            const isEditingEmail = editingEmailId === item.id;
+                            return isEditingEmail ? (
+                              <div className="flex gap-2">
+                                <input type="email" value={editEmailValue} onChange={(e) => setEditEmailValue(e.target.value)} placeholder="Enter email" className="px-2 py-1 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 w-48" autoFocus />
+                                <button onClick={() => handleSaveHostEmail(item.id)} className="p-1 text-green-600 hover:text-green-800"><Check size={16} /></button>
+                                <button onClick={() => { setEditingEmailId(null); setEditEmailValue(''); }} className="p-1 text-slate-400 hover:text-slate-600"><X size={16} /></button>
+                              </div>
+                            ) : (
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  {bestEmail.email && (
+                                    <>
+                                      {bestEmail.confidence === 'high' && <CheckCircle className="text-green-600 flex-shrink-0" size={14} />}
+                                      {bestEmail.confidence === 'medium' && <AlertCircle className="text-yellow-600 flex-shrink-0" size={14} />}
+                                      {bestEmail.confidence === 'low' && <XCircle className="text-red-600 flex-shrink-0" size={14} />}
+                                    </>
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    {bestEmail.email ? <div className="text-sm text-slate-900 truncate">{bestEmail.email}</div> : <div className="text-sm text-slate-400 italic">No email</div>}
+                                    <div className="text-xs text-slate-500">{bestEmail.source && `${bestEmail.source} • ${bestEmail.confidence}`}</div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <button onClick={() => { setEditingEmailId(item.id); setEditEmailValue(bestEmail.email || ''); }} className="p-1 text-indigo-600 hover:text-indigo-800" title="Edit email"><Edit2 size={14} /></button>
+                                    {bestEmail.allEmails.length > 1 && (
+                                      <button onClick={() => setShowEmailModalId(item.id)} className="p-1 text-slate-600 hover:text-slate-800" title={`${bestEmail.allEmails.length} emails available`}><Info size={14} /></button>
+                                    )}
+                                  </div>
+                                </div>
+                                {item.hostContactInfo.linkedin && (
+                                  <a href={item.hostContactInfo.linkedin} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 text-xs flex items-center gap-1">LinkedIn <ExternalLink size={10} /></a>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={item.status}
+                            onChange={(e) => handleOutreachStatusChange(item.id, e.target.value as OutreachDocument['status'])}
+                            className={`text-xs px-2 py-1 rounded-full border ${
+                              item.status === 'needs_itunes_id' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                              item.status === 'identified' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                              'bg-slate-100 text-slate-800 border-slate-300'
+                            }`}
+                          >
+                            <option value="needs_itunes_id">Needs iTunes ID</option>
+                            <option value="identified">Identified</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={item['Outreach Status'] || ''}
+                            onChange={(e) => handleWorkflowStatusChange(item.id, e.target.value as OutreachDocument['Outreach Status'])}
+                            className={`text-xs px-2 py-1 rounded-full border ${
+                              !item['Outreach Status'] ? 'bg-slate-100 text-slate-800 border-slate-300' :
+                              item['Outreach Status'] === 'Ready for outreach' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                              item['Outreach Status'] === '1st message sent' || item['Outreach Status'] === '1st follow- up sent' || item['Outreach Status'] === '2nd follow-up sent' ? 'bg-indigo-100 text-indigo-800 border-indigo-300' :
+                              item['Outreach Status'] === 'Scheduling Screening Call' || item['Outreach Status'] === 'Screening Call Scheduled' || item['Outreach Status'] === 'Scheduling Recording' ? 'bg-purple-100 text-purple-800 border-purple-300' :
+                              item['Outreach Status'] === 'Recording Scheduled' || item['Outreach Status'] === 'Recorded' ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                              item['Outreach Status'] === 'Live' ? 'bg-green-100 text-green-800 border-green-300' :
+                              item['Outreach Status'] === 'Host said no' || item['Outreach Status'] === 'Email bounced' ? 'bg-red-100 text-red-800 border-red-300' :
+                              'bg-slate-100 text-slate-800 border-slate-300'
+                            }`}
+                          >
+                            <option value="">Not Set</option>
+                            <option value="Ready for outreach">Ready for Outreach</option>
+                            <option value="1st message sent">1st Message Sent</option>
+                            <option value="1st follow- up sent">1st Follow-up Sent</option>
+                            <option value="2nd follow-up sent">2nd Follow-up Sent</option>
+                            <option value="Scheduling Screening Call">Scheduling Screening Call</option>
+                            <option value="Screening Call Scheduled">Screening Call Scheduled</option>
+                            <option value="Scheduling Recording">Scheduling Recording</option>
+                            <option value="Recording Scheduled">Recording Scheduled</option>
+                            <option value="Recorded">Recorded</option>
+                            <option value="Live">Live</option>
+                            <option value="Host said no">Host Said No</option>
+                            <option value="Email bounced">Email Bounced</option>
+                            <option value="Paid podcast">Paid Podcast</option>
+                            <option value="Blacklist">Blacklist</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-xs text-slate-500">
+                            {item.createdAt && new Date(item.createdAt.toDate()).toLocaleDateString()}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </ClientSectionCard>
+
+      {/* ── SECTION 11 — REVIEWS ── */}
+      {(() => {
+        const allReviews: { rating: number; quote: string; podcastName?: string; createdAt?: string }[] =
+          (client as any).reviews || [];
+
+        const handleDeleteReview = async (index: number) => {
+          const updated = allReviews.filter((_, i) => i !== index);
+          await updateClient(clientId, { reviews: updated } as any);
+          setClient(prev => prev ? { ...prev, reviews: updated } as any : prev);
+        };
+
+        return (
+          <ClientSectionCard title="⭐ Reviews" accent="default">
+            {allReviews.length === 0 ? (
+              <p className="text-sm text-slate-400 italic">No reviews yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {allReviews.map((r, i) => (
+                  <div key={i} className={`flex items-start gap-3 p-3 rounded-xl border ${r.rating < 6 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`text-sm font-bold ${r.rating < 6 ? 'text-red-600' : 'text-slate-900'}`}>{r.rating}/10</span>
+                        {r.rating < 6 && <span className="text-[10px] font-semibold text-red-500 bg-red-100 px-1.5 py-0.5 rounded-full">Hidden from profile</span>}
+                        {r.podcastName && <span className="text-xs text-slate-400 truncate">{r.podcastName}</span>}
+                      </div>
+                      {r.quote ? (
+                        <p className="text-sm text-slate-600 italic">"{r.quote}"</p>
+                      ) : (
+                        <p className="text-xs text-slate-400 italic">No comment left.</p>
+                      )}
+                      {r.createdAt && (
+                        <p className="text-[10px] text-slate-400 mt-1">{new Date(r.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteReview(i)}
+                      className="flex-shrink-0 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete review"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ClientSectionCard>
+        );
+      })()}
 
       {/* Email Selection Modal */}
       {showEmailModalId && (() => {
@@ -1871,7 +2451,7 @@ export const ClientDetailNew: React.FC<ClientDetailNewProps> = ({ clientId, onBa
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Target Audience</label>
-                        <textarea rows={2} value={editForm.podcast.audienceDescription || ''} onChange={(e) => setEditForm({ ...editForm, podcast: { ...editForm.podcast!, audienceDescription: e.target.value } })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                        <textarea rows={2} value={(editForm.podcast as any).targetAudience || ''} onChange={(e) => setEditForm({ ...editForm, podcast: { ...editForm.podcast!, targetAudience: e.target.value } as any })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Products/Services</label>

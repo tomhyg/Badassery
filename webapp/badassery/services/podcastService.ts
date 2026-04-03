@@ -21,6 +21,7 @@ export interface PodcastDocument {
   website: string;
   episodeCount: number;
   lastUpdate: number | null;
+  newestItemPubdate?: number | null;  // from rebuild_database.js pipeline (same as lastUpdate)
 
   // Email fields
   rss_owner_email: string;
@@ -183,15 +184,45 @@ export interface PodcastDocument {
   ai_engagement_level?: number;
   ai_summary?: string;
 
-  // Badassery Score & Percentiles (added by parallel_scoring_v2.js)
-  ai_badassery_score?: number;            // 0-10 composite score
-  ai_category_percentile?: string;        // Top 1%|Top 5%|Top 10%|Top 25%|Top 50%|Standard
+  // Badassery Score & Percentiles (added by parallel_scoring_v2.js / rebuild_database.js)
+  ai_badassery_score?: number;            // 0-100 composite score
+  ai_category_percentile?: number | string; // number (0-100) in new pipeline, string in old
   ai_category_rank?: number | null;       // Rank within category
   ai_category_total?: number;             // Total podcasts in category
   ai_percentile_used_global?: boolean;    // true if category < 10 podcasts
-  ai_global_percentile?: string;          // Global percentile
+  ai_global_percentile?: number | string; // number (0-100) in new pipeline, string in old
   ai_global_rank?: number;                // Global rank
   ai_global_total?: number;               // Total podcasts scored
+
+  // Enrichment fields (from rebuild_database.js enrichment phases)
+  avg_episode_length_min?: number | null;
+  twitter_followers?: number | null;
+  instagram_followers?: number | null;
+  yt_avg_views_per_video?: number | null;
+  spotify_rating?: number | null;
+  spotify_review_count?: number | null;
+
+  // Guest intelligence (from Gemini scoring)
+  gemini_guest_types?: string[];
+  gemini_typical_guest_profile?: string;
+  gemini_recent_guests?: any[];
+
+  // Badassery sub-scores (from rebuild_database.js Phase 6)
+  score_guest_compatibility?: number;
+  score_audience_power?: number;
+  score_podcast_authority?: number;
+  score_activity_consistency?: number;
+  score_engagement?: number;
+  score_contactability?: number;
+  score_missing_signals?: string[];
+
+  // Extra pipeline fields for detail view
+  oldestItemPubdate?: number | null;
+  publish_consistency?: number | null;
+  feedId?: number | null;
+  gemini_guest_ratio?: number | null;
+  gemini_guest_authority?: string | null;
+  gemini_guest_industries?: string[];
 
   aiCategorizationStatus?: 'completed' | 'failed' | 'pending';
   aiCategorizedAt?: Timestamp;
@@ -1168,6 +1199,17 @@ export const getOutreachHistoryForPodcast = async (podcastItunesId: string): Pro
     console.error('Error fetching outreach history:', error);
     return [];
   }
+};
+
+/**
+ * Update a podcast document in Firestore (merge: true)
+ */
+export const updatePodcast = async (itunesId: string, data: Partial<PodcastDocument> & Record<string, any>): Promise<void> => {
+  const docRef = doc(db, 'podcasts', String(itunesId));
+  const { setDoc } = await import('firebase/firestore');
+  await setDoc(docRef, data, { merge: true });
+  // Invalidate in-memory cache so next load reflects changes
+  clearPodcastCache();
 };
 
 /**

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogIn, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { LogIn, Loader2, AlertCircle } from 'lucide-react';
 import { simpleLogin } from '../services/userService';
 import { User } from '../services/userService';
 
@@ -8,7 +8,7 @@ interface LoginProps {
   onSwitchToClient?: () => void;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLoginSuccess, onSwitchToClient }) => {
+export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -21,7 +21,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, onSwitchToClient }
 
     try {
       const result = await simpleLogin(username, password);
-
       if (result.success && result.user) {
         onLoginSuccess(result.user);
       } else {
@@ -35,115 +34,107 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess, onSwitchToClient }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-slate-900 flex items-center justify-center p-4">
-      {/* Background decoration */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-indigo-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse delay-1000"></div>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-950 to-slate-900 flex">
+
+      {/* Left side — Branding */}
+      <div className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 relative overflow-hidden">
+        {/* Background glow */}
+        <div className="absolute top-0 left-0 w-full h-full">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600 rounded-full filter blur-3xl opacity-20"></div>
+          <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-indigo-500 rounded-full filter blur-3xl opacity-15"></div>
+        </div>
+
+        <div className="relative z-10">
+          <img src="/logo.webp" alt="Badassery" className="h-12 w-auto" />
+        </div>
+
+        <div className="relative z-10 space-y-10">
+          <div>
+            <h1 className="text-4xl font-bold text-white leading-tight mb-4">
+              The smartest way to<br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400">
+                book podcast guests.
+              </span>
+            </h1>
+            <p className="text-purple-200 text-lg leading-relaxed">
+              Discover, score, and pitch podcasts — powered by AI. From outreach to booking, all in one place.
+            </p>
+          </div>
+        </div>
+
+        <p className="relative z-10 text-purple-500 text-sm">© 2026 Badassery. All rights reserved.</p>
       </div>
 
-      <div className="relative w-full max-w-md">
-        {/* Logo/Brand */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-2xl shadow-lg mb-4">
-            <Sparkles size={32} className="text-white" />
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Badassery</h1>
-          <p className="text-purple-200">Podcast Booking Platform</p>
-        </div>
+      {/* Right side — Login form */}
+      <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
+        <div className="w-full max-w-md">
 
-        {/* Login Card */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl border border-white/20 p-8">
-          <h2 className="text-xl font-bold text-white mb-6 text-center">
-            Welcome Back
-          </h2>
-
-          {error && (
-            <div className="mb-6 p-4 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-3 text-red-200">
-              <AlertCircle size={20} />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-purple-200 mb-2">
-                Username
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter your username"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-purple-200 mb-2">
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading || !username || !password}
-              className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold rounded-lg hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 size={20} className="animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                <>
-                  <LogIn size={20} />
-                  Sign In
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Hint for demo */}
-          <div className="mt-6 pt-6 border-t border-white/10">
-            <p className="text-sm text-purple-300 text-center">
-              Demo credentials:
-            </p>
-            <div className="mt-2 p-3 bg-purple-500/20 rounded-lg text-center">
-              <code className="text-purple-200 text-sm">
-                Username: <span className="text-white font-bold">Brooklynn</span>
-                <br />
-                Password: <span className="text-white font-bold">Brooklynn</span>
-              </code>
-            </div>
+          {/* Mobile logo */}
+          <div className="lg:hidden flex justify-center mb-10">
+            <img src="/logo.webp" alt="Badassery" className="h-10 w-auto" />
           </div>
 
-          {/* Client Portal Link */}
-          {onSwitchToClient && (
-            <div className="mt-4 pt-4 border-t border-white/10">
+          <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-8 shadow-2xl">
+            <h2 className="text-2xl font-bold text-white mb-1">Welcome back</h2>
+            <p className="text-purple-300 text-sm mb-8">Sign in to your workspace</p>
+
+            {error && (
+              <div className="mb-6 p-4 bg-red-500/15 border border-red-500/30 rounded-xl flex items-center gap-3 text-red-300">
+                <AlertCircle size={18} />
+                <span className="text-sm">{error}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-purple-200 mb-2">
+                  Email or Username
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your email or username"
+                  className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all text-sm"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-purple-200 mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all text-sm"
+                  required
+                />
+              </div>
+
               <button
-                onClick={onSwitchToClient}
-                className="w-full py-2 text-sm text-purple-200 hover:text-white transition-colors flex items-center justify-center gap-2"
+                type="submit"
+                disabled={isLoading || !username || !password}
+                className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-purple-700 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-lg mt-2"
               >
-                Are you a client? Access your portal
+                {isLoading ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Signing in...
+                  </>
+                ) : (
+                  <>
+                    <LogIn size={18} />
+                    Sign In
+                  </>
+                )}
               </button>
-            </div>
-          )}
+            </form>
+          </div>
         </div>
-
-        {/* Footer */}
-        <p className="text-center text-purple-300 text-sm mt-6">
-          Badassery &copy; 2024
-        </p>
       </div>
     </div>
   );

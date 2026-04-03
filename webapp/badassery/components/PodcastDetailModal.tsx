@@ -2,7 +2,8 @@
  * PodcastDetailModal - Enhanced podcast detail view with email sources, social links, and actions
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { estimateListenersPerEpisode } from '../utils/listenersEstimate';
 import {
   X, Mail, Globe, Youtube, Instagram, Twitter, Linkedin,
   ExternalLink, Copy, Send, CheckCircle, Star, Users, TrendingUp,
@@ -87,6 +88,7 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
 
   const emails = getPodcastEmails(podcast);
   const socialLinks = getPodcastSocialLinks(podcast);
+  const listenersEst = useMemo(() => estimateListenersPerEpisode(podcast as any), [podcast]);
 
   // Load clients when dropdown opens
   useEffect(() => {
@@ -825,6 +827,74 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                 </div>
               )}
 
+              {/* Social Links */}
+              <div className="bg-white rounded-lg p-4 border border-slate-200">
+                <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">Links</h3>
+                <div className="flex flex-wrap gap-2">
+                  {socialLinks.youtube && (
+                    <a href={socialLinks.youtube} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Youtube size={16} /> YouTube
+                    </a>
+                  )}
+                  {socialLinks.instagram && (
+                    <a href={socialLinks.instagram} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-pink-50 text-pink-700 border border-pink-200 rounded-lg hover:bg-pink-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Instagram size={16} /> Instagram
+                    </a>
+                  )}
+                  {socialLinks.twitter && (
+                    <a href={socialLinks.twitter} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Twitter size={16} /> X / Twitter
+                    </a>
+                  )}
+                  {socialLinks.facebook && (
+                    <a href={socialLinks.facebook} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <ExternalLink size={16} /> Facebook
+                    </a>
+                  )}
+                  {socialLinks.linkedin && (
+                    <a href={socialLinks.linkedin} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Linkedin size={16} /> LinkedIn
+                    </a>
+                  )}
+                  {socialLinks.tiktok && (
+                    <a href={socialLinks.tiktok} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <ExternalLink size={16} /> TikTok
+                    </a>
+                  )}
+                  {socialLinks.website && (
+                    <a href={socialLinks.website} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <Globe size={16} /> Website
+                    </a>
+                  )}
+                  {(() => { console.log('Apple btn check — apple_api_url:', podcast.apple_api_url, '| itunesId:', podcast.itunesId); return null; })()}
+                  {(podcast.apple_api_url || podcast.itunesId) && (
+                    <a href={podcast.apple_api_url || `https://podcasts.apple.com/podcast/id${podcast.itunesId}`} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+                      </svg>
+                      Apple Podcasts
+                    </a>
+                  )}
+                  {(podcast as any).website_spotify && (
+                    <a href={(podcast as any).website_spotify} target="_blank" rel="noopener noreferrer"
+                      className="px-3 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition-colors flex items-center gap-2 text-sm font-medium">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+                      </svg>
+                      Spotify
+                    </a>
+                  )}
+                </div>
+              </div>
+
               {/* Topics & Audience */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-white rounded-lg p-4 border border-slate-200">
@@ -851,9 +921,30 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                     )}
                     <div>
                       <div className="text-xs text-slate-500 mb-1">Audience Size</div>
-                      <span className="text-sm font-medium text-slate-700">
-                        {podcast.ai_audience_size || 'Unknown'}
-                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-slate-700">
+                          {podcast.ai_audience_size || 'Unknown'}
+                        </span>
+                        {listenersEst.estimate && (
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              listenersEst.confidence === 'high'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : listenersEst.confidence === 'medium'
+                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}
+                            title={`Estimated downloads per episode (${listenersEst.confidence} confidence) — based on available public signals`}
+                          >
+                            {listenersEst.label}
+                          </span>
+                        )}
+                      </div>
+                      {listenersEst.estimate && (
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          est. range: {listenersEst.range} downloads/ep
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1012,63 +1103,6 @@ export const PodcastDetailModal: React.FC<PodcastDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Social Links */}
-              <div className="bg-white rounded-lg p-4 border border-slate-200">
-                <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">Links</h3>
-                <div className="flex flex-wrap gap-2">
-                  {socialLinks.youtube && (
-                    <a href={socialLinks.youtube} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <Youtube size={16} /> YouTube
-                    </a>
-                  )}
-                  {socialLinks.instagram && (
-                    <a href={socialLinks.instagram} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-pink-50 text-pink-700 border border-pink-200 rounded-lg hover:bg-pink-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <Instagram size={16} /> Instagram
-                    </a>
-                  )}
-                  {socialLinks.twitter && (
-                    <a href={socialLinks.twitter} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <Twitter size={16} /> X / Twitter
-                    </a>
-                  )}
-                  {socialLinks.facebook && (
-                    <a href={socialLinks.facebook} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <ExternalLink size={16} /> Facebook
-                    </a>
-                  )}
-                  {socialLinks.linkedin && (
-                    <a href={socialLinks.linkedin} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-sky-50 text-sky-700 border border-sky-200 rounded-lg hover:bg-sky-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <Linkedin size={16} /> LinkedIn
-                    </a>
-                  )}
-                  {socialLinks.tiktok && (
-                    <a href={socialLinks.tiktok} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <ExternalLink size={16} /> TikTok
-                    </a>
-                  )}
-                  {socialLinks.website && (
-                    <a href={socialLinks.website} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <Globe size={16} /> Website
-                    </a>
-                  )}
-                  {podcast.apple_api_url && (
-                    <a href={podcast.apple_api_url} target="_blank" rel="noopener noreferrer"
-                      className="px-3 py-2 bg-slate-50 text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-medium">
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
-                      </svg>
-                      Apple Podcasts
-                    </a>
-                  )}
-                </div>
-              </div>
             </div>
           )}
 

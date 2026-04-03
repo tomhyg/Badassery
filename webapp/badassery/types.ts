@@ -1,5 +1,5 @@
 
-export type UserRole = 'admin' | 'employee' | 'client';
+export type UserRole = 'admin' | 'employee' | 'client' | 'viewer';
 
 export interface User {
   id: string;
@@ -150,6 +150,7 @@ export interface ClientBrandPersonality {
 export interface ClientContent {
   bioOriginal?: string;
   bioUpdated?: string;
+  bioV1?: string;
   speakingTopicsOriginal?: string;
   speakingTopicsUpdated?: string;
   speakingTopicsArray?: string[];
@@ -546,6 +547,11 @@ export interface Outreach {
   sent_at?: any; // Firestore Timestamp
   response_received?: boolean;
   response_date?: any; // Firestore Timestamp
+
+  // ═══════════════════════════════════════════════════════════════
+  // REVIEW
+  // ═══════════════════════════════════════════════════════════════
+  review_token?: string; // Token for host review link
 
   // ═══════════════════════════════════════════════════════════════
   // METADATA

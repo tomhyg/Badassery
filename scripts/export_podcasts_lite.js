@@ -37,6 +37,8 @@ const LITE_FIELDS = [
   'imageUrl',
   'language',
   'episodeCount',
+  'lastUpdate',
+  'newestItemPubdate',
   'ai_primary_category',
   'ai_secondary_categories',
   'ai_badassery_score',
@@ -48,26 +50,60 @@ const LITE_FIELDS = [
   'ai_category_percentile',
   'ai_global_percentile',
   'ai_topics',
+  'ai_summary',
   'description',
+  // Episode stats (from rebuild_database.js Phase 3)
+  'avg_episode_length_min',
+  // Badassery sub-scores (from rebuild_database.js Phase 6)
+  'score_guest_compatibility',
+  'score_audience_power',
+  'score_podcast_authority',
+  'score_activity_consistency',
+  'score_engagement',
+  'score_contactability',
+  'score_missing_signals',
+  // Guest intelligence (from Gemini scoring)
+  'gemini_guest_types',
+  'gemini_typical_guest_profile',
+  'gemini_recent_guests',
+  'gemini_guest_ratio',
+  'gemini_guest_authority',
+  'gemini_guest_industries',
+  // Extra stats for detail modal
+  'oldestItemPubdate',
+  'publish_consistency',
+  'ai_target_audience',
+  'ai_podcast_style',
+  'feedId',
+  // Ratings & charts
   'apple_rating',
   'apple_rating_count',
+  'apple_chart_rank',
+  'apple_chart_genre',
   'spotify_rating',
   'spotify_review_count',
   'spotify_chart_rank',
   'spotify_chart_genre',
+  // Social audiences
   'yt_subscribers',
+  'yt_avg_views_per_video',
   'yt_channel_id',
   'yt_channel_name',
+  'instagram_followers',
+  'twitter_followers',
+  // Contact & links
   'website',
   'rss_website',
   'apple_api_url',
   'rss_owner_email',
   'website_email',
+  'website_youtube',
   'website_instagram',
   'website_twitter',
   'website_facebook',
   'website_linkedin',
   'website_tiktok',
+  'website_spotify',
   'updatedAt',
 ];
 
@@ -109,7 +145,6 @@ async function exportPodcastsLite() {
 
   while (true) {
     let q = db.collection('podcasts')
-      .where('ai_guest_friendly', '==', true)
       .limit(BATCH_SIZE);
     if (lastDoc) {
       q = q.startAfter(lastDoc);

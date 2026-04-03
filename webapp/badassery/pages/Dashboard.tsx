@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ActivityLog, Client, Outreach } from '../types';
 import { Mail, Clock, Users, Trophy, AlertTriangle, CheckCircle, Calendar, Send, Loader2 } from 'lucide-react';
 import { getAllOutreachV2Cached } from '../services/outreachServiceV2';
+import { getAllClients } from '../services/clientService';
 import {
   calculateDashboardStats,
   calculateNeedsAttention,
@@ -12,39 +13,30 @@ import {
 } from '../services/dashboardService';
 
 interface DashboardProps {
-  clients: Client[];
   logs: ActivityLog[];
   onNavigate: (tab: string) => void;
 }
 
 type DateFilterType = 'today' | 'week' | 'month' | 'year' | 'custom';
 
-export const Dashboard: React.FC<DashboardProps> = ({ clients, logs, onNavigate }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ logs, onNavigate }) => {
   // Date filter state
   const [dateFilterType, setDateFilterType] = useState<DateFilterType>('month');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
-  // Outreach data state
+  // Data state
+  const [clients, setClients] = useState<Client[]>([]);
   const [outreach, setOutreach] = useState<Outreach[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Load outreach data on mount
+  // Load clients + outreach from Firestore on mount
   useEffect(() => {
-    loadOutreach();
+    Promise.all([getAllClients(), getAllOutreachV2Cached()])
+      .then(([c, o]) => { setClients(c); setOutreach(o); })
+      .catch(err => console.error('Dashboard load error:', err))
+      .finally(() => setLoading(false));
   }, []);
-
-  const loadOutreach = async () => {
-    try {
-      setLoading(true);
-      const data = await getAllOutreachV2Cached();
-      setOutreach(data);
-    } catch (error) {
-      console.error('Error loading outreach:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Build date filter object
   const dateFilter: DateFilter = useMemo(() => ({

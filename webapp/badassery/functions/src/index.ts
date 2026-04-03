@@ -1,3 +1,4 @@
+// v3
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as nodemailer from 'nodemailer';
@@ -164,6 +165,62 @@ export const podcastIndexProxy = functions.https.onRequest(async (req, res) => {
 
   const data = await piRes.json();
   res.status(piRes.status).json(data);
+});
+
+/**
+ * Cloud Function: Create Client Auth Account
+ *
+ * Creates a Firebase Auth user and sends an invitation email with a
+ * "Set up your account" link (Firebase password-reset link).
+ * The client clicks the link, chooses their own password, and lands on the app.
+ * No temporary password is ever shared.
+ */
+export const createClientAccount = functions.https.onCall(async (data, _context) => {
+  const { email, password } = data as { email: string; password: string };
+
+  if (!email || !password) {
+    throw new functions.https.HttpsError('invalid-argument', 'Email and password are required');
+  }
+
+  let uid: string;
+  let alreadyExists = false;
+
+  try {
+    const userRecord = await admin.auth().createUser({ email, password });
+    uid = userRecord.uid;
+  } catch (error: any) {
+    if (error.code === 'auth/email-already-exists') {
+      // Update password on existing account
+      const existing = await admin.auth().getUserByEmail(email);
+      uid = existing.uid;
+      await admin.auth().updateUser(uid, { password });
+      alreadyExists = true;
+    } else {
+      throw new functions.https.HttpsError('internal', error.message || 'Failed to create account');
+    }
+  }
+
+  return { uid, alreadyExists };
+});
+
+/**
+ * Cloud Function: Delete Client Auth Account
+ *
+ * Deletes the Firebase Auth user for a client.
+ */
+export const deleteClientAccount = functions.https.onCall(async (data, _context) => {
+  const { uid } = data as { uid: string };
+
+  if (!uid) {
+    throw new functions.https.HttpsError('invalid-argument', 'UID is required');
+  }
+
+  try {
+    await admin.auth().deleteUser(uid);
+    return { success: true };
+  } catch (error: any) {
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to delete account');
+  }
 });
 
 /**
